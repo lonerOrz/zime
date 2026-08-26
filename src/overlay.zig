@@ -25,14 +25,12 @@ const RenderCache = struct {
     hbmp_mem: ?c.HBITMAP = null,
     pixel_bits: ?[*]u8 = null,
     graphics: ?*anyopaque = null,
-    pen_border: ?*anyopaque = null,
     font: ?*anyopaque = null,
     path_pill: ?*anyopaque = null,
 
     fn release(self: *RenderCache) void {
         if (self.path_pill) |p| _ = win.GdipDeletePath(p);
         if (self.font) |f| _ = win.GdipDeleteFont(f);
-        if (self.pen_border) |pen| _ = win.GdipDeletePen(pen);
         if (self.graphics) |g| _ = win.GdipDeleteGraphics(g);
         if (self.hbmp_mem) |bmp| _ = c.DeleteObject(bmp);
         if (self.hdc_mem) |dc| _ = c.DeleteDC(dc);
@@ -74,10 +72,6 @@ const RenderCache = struct {
         _ = win.GdipSetSmoothingMode(gfx, 4); // AntiAlias
         _ = win.GdipSetTextRenderingHint(gfx, 4); // AntiAliasGridFit
 
-        var pen: *anyopaque = undefined;
-        if (win.GdipCreatePen1(config.color_border, 1.0 * dpi_scale, 2, &pen) != 0) return error.CreatePenFailed; // UnitPixel
-        errdefer _ = win.GdipDeletePen(pen);
-
         var font_obj: *anyopaque = undefined;
         if (win.GdipCreateFont(font_family, geometry.scale(config.base_font_size, dpi_scale), 1, 2, &font_obj) != 0) return error.CreateFontFailed; // Bold, UnitPixel
         errdefer _ = win.GdipDeleteFont(font_obj);
@@ -100,7 +94,6 @@ const RenderCache = struct {
         self.hbmp_mem = bmp;
         self.pixel_bits = @ptrCast(bits_ptr);
         self.graphics = gfx;
-        self.pen_border = pen;
         self.font = font_obj;
         self.path_pill = path;
     }
@@ -188,7 +181,6 @@ pub fn show(state: ime.ImeState) void {
 
     const path = cache.path_pill.?;
     if (g_brush_bg) |b| _ = win.GdipFillPath(graphics, b, path);
-    _ = win.GdipDrawPath(graphics, cache.pen_border.?, path);
 
     const text: [*:0]const u16 = if (state == .chinese)
         std.unicode.utf8ToUtf16LeStringLiteral("中")
