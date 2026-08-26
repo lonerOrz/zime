@@ -179,10 +179,6 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
 }
 
 pub fn main() !void {
-    // Initialize COM for UI Automation caret query
-    _ = win.CoInitializeEx(null, 0x2);
-    defer win.CoUninitialize();
-
     // Enable Per-Monitor DPI Awareness V2
     _ = win.SetProcessDpiAwarenessContext(-4);
 

@@ -126,8 +126,6 @@ pub fn init(instance: c.HINSTANCE, lang: i18n.Language) void {
     _ = win.GdipCreateSolidFill(config.color_text_chinese, @ptrCast(&g_brush_zh));
     _ = win.GdipCreateSolidFill(config.color_text_english, @ptrCast(&g_brush_en));
 
-    caret.init();
-
     const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ZimeOverlayHUD");
     var wc = std.mem.zeroes(c.WNDCLASSEXW);
     wc.cbSize = @sizeOf(c.WNDCLASSEXW);
@@ -160,7 +158,6 @@ pub fn setLanguage(lang: i18n.Language) void {
 
 /// Releases HUD window and GDI+ resources.
 pub fn deinit() void {
-    caret.deinit();
     g_cache.release();
 
     if (g_brush_en) |b| _ = win.GdipDeleteBrush(b);

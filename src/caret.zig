@@ -4,10 +4,15 @@ const config = @import("config.zig");
 const geometry = @import("geometry.zig");
 const c = win.c;
 
+/// Lazy COM+UIA state — only held while queryUiaCaret is running.
 var g_uia: ?*win.IUIAutomation = null;
+var g_com_inited: bool = false;
 
 /// Initializes the UI Automation client and caps IPC timeout.
-pub fn init() void {
+fn ensureCom() void {
+    if (g_com_inited) return;
+    _ = win.CoInitializeEx(null, c.COINIT_APARTMENTTHREADED);
+    g_com_inited = true;
     _ = win.CoCreateInstance(
         &win.CLSID_CUIAutomation,
         null,
@@ -15,8 +20,6 @@ pub fn init() void {
         &win.IID_IUIAutomation,
         @ptrCast(&g_uia),
     );
-
-    // Limit cross-process IPC duration to prevent hook thread hangs
     if (g_uia) |uia| {
         var uia2: ?*win.IUIAutomation2 = null;
         if (uia.lpVtbl.QueryInterface(uia, &win.IID_IUIAutomation2, @ptrCast(&uia2)) == 0 and uia2 != null) {
@@ -27,11 +30,14 @@ pub fn init() void {
     }
 }
 
-/// Releases the global UI Automation instance.
-pub fn deinit() void {
+fn releaseCom() void {
     if (g_uia) |u| {
         _ = u.lpVtbl.Release(u);
         g_uia = null;
+    }
+    if (g_com_inited) {
+        win.CoUninitialize();
+        g_com_inited = false;
     }
 }
 
@@ -77,6 +83,8 @@ pub fn resolveAnchor(dpi_scale: f32) geometry.Point {
 
 /// Queries text selection bounds from the focused UI Automation element.
 fn queryUiaCaret() ?geometry.Point {
+    ensureCom();
+    defer releaseCom();
     const uia = g_uia orelse return null;
 
     var elem: ?*win.IUIAutomationElement = null;
