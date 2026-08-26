@@ -51,16 +51,16 @@ test "clampToWorkArea normal placement" {
 
 test "right overflow clamps x; bottom overflow flips above anchor" {
     const screen = Rect{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 };
-    // width 46: right limit = 1920 - 46 - 4 = 1870
-    // height 28, flip offset 28: y = 1070 - 28 - 28 = 1014
+    // width 27 (padding 8+8 + font 11): right limit = 1920 - 27 - 4 = 1889
+    // height 19 (font 11 + padding 4+4), flip offset 28: y = 1070 - 19 - 28 = 1023
     const clamped = clampToWorkArea(.{ .x = 1900, .y = 1070 }, 1.0, screen);
-    try std.testing.expectEqual(@as(i32, 1870), clamped.x);
-    try std.testing.expectEqual(@as(i32, 1014), clamped.y);
+    try std.testing.expectEqual(@as(i32, 1889), clamped.x);
+    try std.testing.expectEqual(@as(i32, 1023), clamped.y);
 }
 
 test "flip above top edge clamps to work area top" {
     const tight = Rect{ .left = 0, .top = 100, .right = 800, .bottom = 120 };
-    // flipped y = 118 - 28 - 28 = 62 < top(100) -> clamped to 104
+    // flipped y = 118 - 19 - 28 = 71 < top(100) -> clamped to 104
     const clamped = clampToWorkArea(.{ .x = 400, .y = 118 }, 1.0, tight);
     try std.testing.expectEqual(@as(i32, 104), clamped.y);
 }
