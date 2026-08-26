@@ -25,8 +25,8 @@ pub inline fn scaleInt(val: f32, dpi_scale: f32) i32 {
 
 /// Clamps HUD within monitor work area; flips above anchor on overflow.
 pub fn clampToWorkArea(pt: Point, dpi_scale: f32, work_area: Rect) Point {
-    const width = scaleInt(config.base_width, dpi_scale);
-    const height = scaleInt(config.base_height, dpi_scale);
+    const width = scaleInt(config.padding_left + config.padding_right + config.base_font_size, dpi_scale);
+    const height = scaleInt(config.base_font_size + config.padding_top + config.padding_bottom, dpi_scale);
     var result = pt;
 
     // Horizontal clamping

@@ -4,10 +4,12 @@ const ime = @import("ime.zig");
 const caret = @import("caret.zig");
 const config = @import("config.zig");
 const geometry = @import("geometry.zig");
+const i18n = @import("i18n.zig");
 const c = win.c;
 
 var g_hwnd_overlay: c.HWND = null;
 var g_gdiplus_token: usize = 0;
+var g_lang: i18n.Language = .auto;
 
 // Process-lifetime GDI+ resources
 var g_font_family: ?*anyopaque = null;
@@ -27,6 +29,7 @@ const RenderCache = struct {
     graphics: ?*anyopaque = null,
     font: ?*anyopaque = null,
     path_pill: ?*anyopaque = null,
+    state: ime.ImeState = .english,
 
     fn release(self: *RenderCache) void {
         if (self.path_pill) |p| _ = win.GdipDeletePath(p);
@@ -37,14 +40,17 @@ const RenderCache = struct {
         self.* = .{};
     }
 
-    fn ensure(self: *RenderCache, dpi_scale: f32, hdc_screen: c.HDC) !void {
-        if (self.scale == dpi_scale and self.hdc_mem != null) return;
+    fn ensure(self: *RenderCache, dpi_scale: f32, hdc_screen: c.HDC, text_width: i32, state: ime.ImeState) !bool {
+        if (self.scale == dpi_scale and self.width_px == text_width and self.hdc_mem != null and self.state == state) return false;
         self.release();
 
         const font_family = g_font_family orelse return error.NoFontFamily;
 
-        const w = geometry.scaleInt(config.base_width, dpi_scale);
-        const h = geometry.scaleInt(config.base_height, dpi_scale);
+        const h = geometry.scaleInt(
+            config.base_font_size + config.padding_top + config.padding_bottom,
+            dpi_scale,
+        );
+        const w = text_width + geometry.scaleInt(config.padding_left + config.padding_right, dpi_scale);
         const radius = geometry.scale(config.base_corner_radius, dpi_scale);
         const fw: f32 = @floatFromInt(w);
         const fh: f32 = @floatFromInt(h);
@@ -96,13 +102,16 @@ const RenderCache = struct {
         self.graphics = gfx;
         self.font = font_obj;
         self.path_pill = path;
+        self.state = state;
+        return true;
     }
 };
 
 var g_cache = RenderCache{};
 
 /// Initializes GDI+, global brushes, and the layered HUD window.
-pub fn init(instance: c.HINSTANCE) void {
+pub fn init(instance: c.HINSTANCE, lang: i18n.Language) void {
+    g_lang = lang;
     var gdi_input = win.GdiplusStartupInput{};
     _ = win.GdiplusStartup(&g_gdiplus_token, &gdi_input, null);
 
@@ -134,13 +143,19 @@ pub fn init(instance: c.HINSTANCE) void {
         c.WS_POPUP,
         -500,
         -500,
-        @intFromFloat(config.base_width),
-        @intFromFloat(config.base_height),
+        @intFromFloat(config.padding_left + config.padding_right),
+        @intFromFloat(config.base_font_size + config.padding_top + config.padding_bottom),
         null,
         null,
         instance,
         null,
     );
+}
+
+/// Updates the language used by the overlay (called from main when user changes language).
+pub fn setLanguage(lang: i18n.Language) void {
+    g_lang = lang;
+    g_cache.scale = 0;
 }
 
 /// Releases HUD window and GDI+ resources.
@@ -169,28 +184,38 @@ pub fn show(state: ime.ImeState) void {
     const hdc_screen = c.GetDC(null);
     defer _ = c.ReleaseDC(null, hdc_screen);
 
-    g_cache.ensure(dpi_scale, hdc_screen) catch return;
+    const resolved = i18n.I18n.resolveLanguage(g_lang);
+    const text: [*:0]const u16 = switch (resolved) {
+        .zh_CN => if (state == .chinese)
+            std.unicode.utf8ToUtf16LeStringLiteral("中")
+        else
+            std.unicode.utf8ToUtf16LeStringLiteral("英"),
+        else => if (state == .chinese)
+            std.unicode.utf8ToUtf16LeStringLiteral("C")
+        else
+            std.unicode.utf8ToUtf16LeStringLiteral("E"),
+    };
+    const text_width = measureTextWidth(dpi_scale, text);
+
+    const size_changed = g_cache.ensure(dpi_scale, hdc_screen, text_width, state) catch return;
     const cache = &g_cache;
     const w = cache.width_px;
     const h = cache.height_px;
+    if (size_changed) _ = c.MoveWindow(hwnd, -500, -500, w, h, c.FALSE);
     const graphics = cache.graphics.?;
 
-    // Clear previous frame buffer
     const buf_len = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
     @memset(cache.pixel_bits.?[0..buf_len], 0);
 
     const path = cache.path_pill.?;
     if (g_brush_bg) |b| _ = win.GdipFillPath(graphics, b, path);
 
-    const text: [*:0]const u16 = if (state == .chinese)
-        std.unicode.utf8ToUtf16LeStringLiteral("中")
-    else
-        std.unicode.utf8ToUtf16LeStringLiteral("英");
     const text_brush = if (state == .chinese) g_brush_zh else g_brush_en;
 
     if (text_brush) |tb| {
         const layout_rect = win.RectF{ .X = 0, .Y = 0, .Width = @floatFromInt(w), .Height = @floatFromInt(h) };
-        _ = win.GdipDrawString(graphics, text, 1, cache.font.?, &layout_rect, g_str_format.?, tb);
+        const text_len = @as(c_int, @intCast(std.mem.len(text)));
+        _ = win.GdipDrawString(graphics, text, text_len, cache.font.?, &layout_rect, g_str_format.?, tb);
     }
 
     const pt = caret.resolveAnchor(dpi_scale);
@@ -208,7 +233,23 @@ pub fn show(state: ime.ImeState) void {
     _ = c.ShowWindow(hwnd, c.SW_SHOWNOACTIVATE);
 }
 
-/// Hides the HUD overlay window.
+/// Measures text width in pixels at the given DPI scale.
+fn measureTextWidth(dpi_scale: f32, text: [*:0]const u16) i32 {
+    const font_family = g_font_family orelse return @intFromFloat(config.padding_left + config.padding_right);
+    var font_obj: *anyopaque = undefined;
+    const font_size = geometry.scale(config.base_font_size, dpi_scale);
+    if (win.GdipCreateFont(font_family, font_size, 1, 2, &font_obj) != 0) return @intFromFloat(config.padding_left + config.padding_right);
+    defer _ = win.GdipDeleteFont(font_obj);
+
+    var gfx: *anyopaque = undefined;
+    const mem_dc = c.CreateCompatibleDC(null) orelse return @intFromFloat(config.padding_left + config.padding_right);
+    defer _ = c.DeleteDC(mem_dc);
+    if (win.GdipCreateFromHDC(mem_dc, &gfx) != 0) return @intFromFloat(config.padding_left + config.padding_right);
+
+    var bbox: win.RectF = undefined;
+    _ = win.GdipMeasureString(gfx, text, @as(c_int, @intCast(std.mem.len(text))), font_obj, &win.RectF{ .X = 0, .Y = 0, .Width = 9999.0, .Height = 9999.0 }, null, &bbox, null, null);
+    return @intFromFloat(@ceil(bbox.Width));
+}
 pub fn hide() void {
     if (g_hwnd_overlay != null) {
         _ = c.ShowWindow(g_hwnd_overlay, c.SW_HIDE);

@@ -1,6 +1,8 @@
-// Base geometry at 96 DPI (logical pixels)
-pub const base_width: f32 = 32.0;
-pub const base_height: f32 = 20.0;
+// Text padding inside the pill at 96 DPI
+pub const padding_left: f32 = 8.0;
+pub const padding_right: f32 = 8.0;
+pub const padding_top: f32 = 4.0;
+pub const padding_bottom: f32 = 4.0;
 pub const base_corner_radius: f32 = 5.0;
 pub const base_font_size: f32 = 11.0;
 
@@ -31,4 +33,7 @@ pub const TIMER_AUTOHIDE: usize = 201;
 pub const MENU_TRAY_EXIT: usize = 301;
 pub const MENU_TRAY_AUTOSTART: usize = 302;
 pub const MENU_TRAY_RESTART: usize = 303;
+pub const MENU_TRAY_LANGUAGE: usize = 304;
+pub const MENU_TRAY_LANG_ZH: usize = 305;
+pub const MENU_TRAY_LANG_EN: usize = 306;
 pub const IDI_APP_ICON: usize = 1;

@@ -54,6 +54,7 @@ pub extern "advapi32" fn RegSetValueExW(hkey: *anyopaque, name: [*:0]const u16, 
 pub extern "advapi32" fn RegSetKeyValueW(hkey: *anyopaque, subkey: ?[*:0]const u16, name: [*:0]const u16, typ: u32, data: *const anyopaque, cb: u32) callconv(.winapi) c_int;
 pub extern "advapi32" fn RegDeleteValueW(hkey: *anyopaque, name: [*:0]const u16) callconv(.winapi) c_int;
 pub extern "advapi32" fn RegCloseKey(hkey: *anyopaque) callconv(.winapi) c_int;
+pub extern "advapi32" fn RegCreateKeyExW(hkey: *anyopaque, subkey: [*:0]const u16, reserved: u32, class_: ?[*:0]const u16, options: u32, sam: u32, sa: ?*anyopaque, result: **anyopaque, disposition: ?*u32) callconv(.winapi) c_int;
 pub const HKCU_VALUE: *anyopaque = @ptrFromInt(0x80000001); // HKEY_CURRENT_USER
 
 // OLE SafeArray structures

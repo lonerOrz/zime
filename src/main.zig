@@ -4,6 +4,7 @@ const hook = @import("hook.zig");
 const overlay = @import("overlay.zig");
 const config = @import("config.zig");
 const win = @import("win.zig");
+const i18n = @import("i18n.zig");
 const c = win.c;
 
 const WM_TRAY: c.UINT = config.WM_TRAY_CALLBACK;
@@ -11,8 +12,11 @@ const ID_TIMER_AUTOHIDE: usize = config.TIMER_AUTOHIDE;
 const ID_TRAY_EXIT: usize = config.MENU_TRAY_EXIT;
 const ID_TRAY_AUTOSTART: usize = config.MENU_TRAY_AUTOSTART;
 const ID_TRAY_RESTART: usize = config.MENU_TRAY_RESTART;
+const ID_TRAY_LANGUAGE: usize = config.MENU_TRAY_LANGUAGE;
+const ID_TRAY_LANG_ZH: usize = config.MENU_TRAY_LANG_ZH;
+const ID_TRAY_LANG_EN: usize = config.MENU_TRAY_LANG_EN;
 
-/// 将资源 ID 整数转换为 LPCWSTR 指针（Win32 整数资源标识符约定）
+/// Converts resource ID integer to LPCWSTR
 fn makeResourcePtr(id: usize) [*c]const c_ushort {
     const u = union(enum) {
         i: usize,
@@ -25,6 +29,8 @@ var g_hwnd_main: c.HWND = null;
 var g_nid: c.NOTIFYICONDATAW = undefined;
 var g_last_state: ?ime.ImeState = null;
 var g_h_mutex: ?c.HANDLE = null;
+var g_lang: i18n.Language = .auto;
+var g_strs: i18n.Strings = undefined;
 
 const run_subkey = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const run_value_name = std.unicode.utf8ToUtf16LeStringLiteral("Zime");
@@ -66,6 +72,22 @@ fn setAutostart(enable: bool) void {
         _ = win.RegSetValueExW(hk, run_value_name.ptr, 0, 1, &quoted, bytes); // 1 = REG_SZ
     } else {
         _ = win.RegDeleteValueW(hk, run_value_name.ptr);
+    }
+}
+
+/// Sets language preference and persists to registry.
+fn setLanguage(lang: i18n.Language) void {
+    g_lang = lang;
+    g_strs = i18n.I18n.getStrings(lang);
+    i18n.I18n.persistLanguage(lang);
+    const tip = g_strs.tray_tooltip;
+    const tip_len = std.mem.len(tip);
+    @memset(g_nid.szTip[0..], 0);
+    @memcpy(g_nid.szTip[0..tip_len], tip[0..tip_len]);
+    _ = c.Shell_NotifyIconW(c.NIM_MODIFY, &g_nid);
+    overlay.setLanguage(lang);
+    if (g_last_state) |state| {
+        overlay.show(state);
     }
 }
 
@@ -118,10 +140,20 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
                 defer _ = c.DestroyMenu(hmenu);
 
                 const item_flags: c.UINT = @intCast(if (autostartEnabled()) c.MF_CHECKED else c.MF_UNCHECKED);
-                _ = c.AppendMenuW(hmenu, item_flags, ID_TRAY_AUTOSTART, std.unicode.utf8ToUtf16LeStringLiteral("开机自启").ptr);
+                _ = c.AppendMenuW(hmenu, item_flags, ID_TRAY_AUTOSTART, g_strs.menu_autostart);
                 _ = c.AppendMenuW(hmenu, c.MF_SEPARATOR, 0, null);
-                _ = c.AppendMenuW(hmenu, c.MF_STRING, ID_TRAY_RESTART, std.unicode.utf8ToUtf16LeStringLiteral("重启 Zime").ptr);
-                _ = c.AppendMenuW(hmenu, c.MF_STRING, ID_TRAY_EXIT, std.unicode.utf8ToUtf16LeStringLiteral("退出 Zime").ptr);
+                {
+                    const hlang = c.CreatePopupMenu();
+                    defer _ = c.DestroyMenu(hlang);
+                    const lang_checked_zh = if (g_lang == .zh_CN) c.MF_CHECKED else c.MF_UNCHECKED;
+                    const lang_checked_en = if (g_lang == .en) c.MF_CHECKED else c.MF_UNCHECKED;
+                    _ = c.AppendMenuW(hlang, @intCast(lang_checked_zh), ID_TRAY_LANG_ZH, std.unicode.utf8ToUtf16LeStringLiteral("中文").ptr);
+                    _ = c.AppendMenuW(hlang, @intCast(lang_checked_en), ID_TRAY_LANG_EN, std.unicode.utf8ToUtf16LeStringLiteral("English").ptr);
+                    _ = c.AppendMenuW(hmenu, @intCast(c.MF_POPUP), @intFromPtr(hlang), g_strs.menu_language);
+                }
+                _ = c.AppendMenuW(hmenu, c.MF_SEPARATOR, 0, null);
+                _ = c.AppendMenuW(hmenu, c.MF_STRING, ID_TRAY_RESTART, g_strs.menu_restart);
+                _ = c.AppendMenuW(hmenu, c.MF_STRING, ID_TRAY_EXIT, g_strs.menu_exit);
                 _ = c.SetForegroundWindow(hwnd);
                 _ = c.TrackPopupMenu(hmenu, c.TPM_BOTTOMALIGN | c.TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd, null);
                 _ = c.PostMessageW(hwnd, c.WM_NULL, 0, 0);
@@ -132,6 +164,8 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
                 ID_TRAY_EXIT => _ = c.DestroyWindow(hwnd),
                 ID_TRAY_RESTART => restartSelf(),
                 ID_TRAY_AUTOSTART => setAutostart(!autostartEnabled()),
+                ID_TRAY_LANG_ZH => setLanguage(.zh_CN),
+                ID_TRAY_LANG_EN => setLanguage(.en),
                 else => {},
             }
         },
@@ -165,7 +199,12 @@ pub fn main() !void {
 
     const instance: c.HINSTANCE = @ptrCast(c.GetModuleHandleW(null));
 
-    // Load app icons (large for window class, small for tray)
+    const persisted = i18n.I18n.loadPersistedLanguage();
+    const lang = i18n.I18n.resolveLanguage(persisted);
+    g_lang = lang;
+    g_strs = i18n.I18n.getStrings(lang);
+
+    // Load app icons
     const raw_icon_big = c.LoadImageW(
         instance,
         makeResourcePtr(config.IDI_APP_ICON),
@@ -211,7 +250,7 @@ pub fn main() !void {
         null,
     );
 
-    overlay.init(instance);
+    overlay.init(instance, lang);
     defer overlay.deinit();
 
     // Setup system tray icon
@@ -223,8 +262,10 @@ pub fn main() !void {
     g_nid.uCallbackMessage = WM_TRAY;
     g_nid.hIcon = h_icon_sm;
 
-    const tip = std.unicode.utf8ToUtf16LeStringLiteral("Zime 输入法指示器");
-    @memcpy(g_nid.szTip[0..tip.len], tip);
+    const strs = i18n.I18n.getStrings(lang);
+    const tip = strs.tray_tooltip;
+    const tip_len = std.mem.len(tip);
+    @memcpy(g_nid.szTip[0..tip_len], tip[0..tip_len]);
     _ = c.Shell_NotifyIconW(c.NIM_ADD, &g_nid);
 
     hook.installHooks(g_hwnd_main, instance);
