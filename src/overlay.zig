@@ -9,16 +9,14 @@ const c = win.c;
 var g_hwnd_overlay: c.HWND = null;
 var g_gdiplus_token: usize = 0;
 
-// Long-lived GDI+ objects (process lifetime).
+// Process-lifetime GDI+ resources
 var g_font_family: ?*anyopaque = null;
 var g_str_format: ?*anyopaque = null;
 var g_brush_bg: ?*anyopaque = null;
 var g_brush_zh: ?*anyopaque = null;
 var g_brush_en: ?*anyopaque = null;
 
-// DPI-keyed render pool: mem DC, DIB, graphics, font, pen, pill path are
-// rebuilt only when the monitor DPI scale changes, so steady-state toggling
-// performs zero GDI/GDI+ allocation.
+/// DPI-keyed cache to avoid GDI/GDI+ allocations during steady-state rendering.
 const RenderCache = struct {
     scale: f32 = 0.0,
     width_px: i32 = 0,
@@ -56,7 +54,7 @@ const RenderCache = struct {
         const mem_dc = c.CreateCompatibleDC(hdc_screen) orelse return error.CreateDcFailed;
         errdefer _ = c.DeleteDC(mem_dc);
 
-        // Negative height => top-down DIB, matching GDI+ pixel addressing.
+        // Top-down 32bpp DIB section
         var bmi = std.mem.zeroes(c.BITMAPINFO);
         bmi.bmiHeader.biSize = @sizeOf(c.BITMAPINFOHEADER);
         bmi.bmiHeader.biWidth = w;
@@ -85,7 +83,7 @@ const RenderCache = struct {
         errdefer _ = win.GdipDeleteFont(font_obj);
 
         var path: *anyopaque = undefined;
-        if (win.GdipCreatePath(0, &path) != 0) return error.CreatePathFailed; // FillModeAlternate
+        if (win.GdipCreatePath(0, &path) != 0) return error.CreatePathFailed;
         errdefer _ = win.GdipDeletePath(path);
 
         const d = radius * 2.0;
@@ -110,6 +108,7 @@ const RenderCache = struct {
 
 var g_cache = RenderCache{};
 
+/// Initializes GDI+, global brushes, and the layered HUD window.
 pub fn init(instance: c.HINSTANCE) void {
     var gdi_input = win.GdiplusStartupInput{};
     _ = win.GdiplusStartup(&g_gdiplus_token, &gdi_input, null);
@@ -151,6 +150,7 @@ pub fn init(instance: c.HINSTANCE) void {
     );
 }
 
+/// Releases HUD window and GDI+ resources.
 pub fn deinit() void {
     caret.deinit();
     g_cache.release();
@@ -166,6 +166,7 @@ pub fn deinit() void {
     }
 }
 
+/// Renders and displays the indicator pill near active caret.
 pub fn show(state: ime.ImeState) void {
     const hwnd = g_hwnd_overlay orelse return;
 
@@ -181,14 +182,14 @@ pub fn show(state: ime.ImeState) void {
     const h = cache.height_px;
     const graphics = cache.graphics.?;
 
-    // The cached DIB keeps last frame's pixels; clear before drawing.
-    @memset(cache.pixel_bits.?[0..@intCast(w * h * 4)], 0);
+    // Clear previous frame buffer
+    const buf_len = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
+    @memset(cache.pixel_bits.?[0..buf_len], 0);
 
     const path = cache.path_pill.?;
     if (g_brush_bg) |b| _ = win.GdipFillPath(graphics, b, path);
     _ = win.GdipDrawPath(graphics, cache.pen_border.?, path);
 
-    // GDI+ writes premultiplied ARGB into the DIB directly.
     const text: [*:0]const u16 = if (state == .chinese)
         std.unicode.utf8ToUtf16LeStringLiteral("中")
     else
@@ -215,15 +216,14 @@ pub fn show(state: ime.ImeState) void {
     _ = c.ShowWindow(hwnd, c.SW_SHOWNOACTIVATE);
 }
 
+/// Hides the HUD overlay window.
 pub fn hide() void {
     if (g_hwnd_overlay != null) {
         _ = c.ShowWindow(g_hwnd_overlay, c.SW_HIDE);
     }
 }
 
-/// Tray icon drawn at runtime in the same style as the HUD pill.
-/// Uses only primitives proven on every machine: DIB + GdipCreateFromHDC
-/// (the HUD render path) plus plain-GDI CreateIconIndirect for the HICON.
+/// Dynamically renders a DPI-scaled system tray icon.
 pub fn createTrayIcon(size_px: i32) ?c.HICON {
     const brush_bg = g_brush_bg orelse return null;
 
@@ -232,7 +232,7 @@ pub fn createTrayIcon(size_px: i32) ?c.HICON {
     const mem_dc = c.CreateCompatibleDC(hdc_screen) orelse return null;
     defer _ = c.DeleteDC(mem_dc);
 
-    // 32bpp top-down DIB => per-pixel alpha survives CreateIconIndirect.
+    // 32bpp top-down color bitmap with alpha channel
     var bmi = std.mem.zeroes(c.BITMAPINFO);
     bmi.bmiHeader.biSize = @sizeOf(c.BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = size_px;
@@ -250,13 +250,11 @@ pub fn createTrayIcon(size_px: i32) ?c.HICON {
     defer _ = win.GdipDeleteGraphics(gfx);
     _ = win.GdipSetSmoothingMode(gfx, 4);
 
-    // Full-bleed pill (inset 0.5): at tray sizes a 1px transparent ring reads
-    // as a broken background.
     const fs: f32 = @floatFromInt(size_px);
     const radius = fs * 0.28;
     const d = radius * 2.0;
     var path: *anyopaque = undefined;
-    if (win.GdipCreatePath(0, &path) != 0) return null; // FillModeAlternate
+    if (win.GdipCreatePath(0, &path) != 0) return null;
     defer _ = win.GdipDeletePath(path);
     _ = win.GdipAddPathArc(path, 0.5, 0.5, d, d, 180.0, 90.0);
     _ = win.GdipAddPathArc(path, fs - d - 0.5, 0.5, d, d, 270.0, 90.0);
@@ -266,9 +264,7 @@ pub fn createTrayIcon(size_px: i32) ?c.HICON {
 
     _ = win.GdipFillPath(gfx, brush_bg, path);
 
-    // Real typeface 中, pixel-centered via MeasureString ink box: StringFormat
-    // centering trusts line-box metrics that skew CJK glyphs at tray sizes;
-    // the typographic format reports pure ink bounds so centering is exact.
+    // Typographic string format for accurate ink-bounding-box centering
     var fmt_typo: *anyopaque = undefined;
     if (win.GdipStringFormatGetGenericTypographic(&fmt_typo) != 0) return null;
     defer _ = win.GdipDeleteStringFormat(fmt_typo);
@@ -276,9 +272,9 @@ pub fn createTrayIcon(size_px: i32) ?c.HICON {
     const brush_zh = g_brush_zh orelse return null;
 
     var font_obj: *anyopaque = undefined;
-    if (win.GdipCreateFont(font_family, fs * 0.66, 1, 2, &font_obj) != 0) return null; // Bold, UnitPixel
+    if (win.GdipCreateFont(font_family, fs * 0.66, 1, 2, &font_obj) != 0) return null;
     defer _ = win.GdipDeleteFont(font_obj);
-    _ = win.GdipSetTextRenderingHint(gfx, 4); // AntiAliasGridFit
+    _ = win.GdipSetTextRenderingHint(gfx, 4);
 
     const zh = std.unicode.utf8ToUtf16LeStringLiteral("中");
     const full = win.RectF{ .X = 0, .Y = 0, .Width = fs, .Height = fs };
@@ -292,9 +288,13 @@ pub fn createTrayIcon(size_px: i32) ?c.HICON {
     };
     _ = win.GdipDrawString(gfx, zh.ptr, 1, font_obj, &layout, fmt_typo, brush_zh);
 
-    // Zeroed mask: CreateBitmap's bits are undefined when null is passed.
-    var mask_bits: [128]u8 = @splat(0); // ponytail: covers up to 32px icons
-    const mask_bmp = c.CreateBitmap(size_px, size_px, 1, 1, &mask_bits) orelse return null;
+    // DWORD-aligned stride calculation for monochrome 1bpp mask
+    const stride: usize = @intCast(((@as(u32, @intCast(size_px)) + 31) / 32) * 4);
+    const mask_size = stride * @as(usize, @intCast(size_px));
+    var mask_bits: [2048]u8 = @splat(0);
+    const mask_slice = if (mask_size <= mask_bits.len) mask_bits[0..mask_size] else return null;
+
+    const mask_bmp = c.CreateBitmap(size_px, size_px, 1, 1, mask_slice.ptr) orelse return null;
     defer _ = c.DeleteObject(mask_bmp);
 
     var ii = std.mem.zeroes(c.ICONINFO);

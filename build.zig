@@ -5,32 +5,38 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Strip debug info from the binary") orelse false;
 
+    // Main executable definition
     const exe = b.addExecutable(.{
         .name = "zime",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .link_libc = true, // pulls in MinGW headers for @cImport
+            .link_libc = true, // Required for MinGW C headers in @cImport
             .strip = strip,
         }),
     });
 
     exe.subsystem = .Windows;
 
-    exe.root_module.linkSystemLibrary("user32", .{});
-    exe.root_module.linkSystemLibrary("gdi32", .{});
-    exe.root_module.linkSystemLibrary("gdiplus", .{});
-    exe.root_module.linkSystemLibrary("imm32", .{});
-    exe.root_module.linkSystemLibrary("shell32", .{});
-    exe.root_module.linkSystemLibrary("ole32", .{});
-    exe.root_module.linkSystemLibrary("oleaut32", .{});
-    exe.root_module.linkSystemLibrary("advapi32", .{});
+    // Link required Windows system libraries
+    const system_libs = [_][]const u8{
+        "user32",
+        "gdi32",
+        "gdiplus",
+        "imm32",
+        "shell32",
+        "ole32",
+        "oleaut32",
+        "advapi32",
+    };
+    for (system_libs) |lib| {
+        exe.root_module.linkSystemLibrary(lib, .{});
+    }
 
     b.installArtifact(exe);
 
-    // Pure-calculation unit tests (geometry; config stays import-free so the
-    // suite runs on any target).
+    // Target-agnostic unit tests for pure calculations
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/geometry.zig"),

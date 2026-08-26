@@ -6,9 +6,8 @@ const c = win.c;
 
 var g_uia: ?*win.IUIAutomation = null;
 
+/// Initializes the UI Automation client and caps IPC timeout.
 pub fn init() void {
-    // One CUIAutomation for the process lifetime; per-keystroke CoCreateInstance
-    // costs milliseconds of COM/IPC setup.
     _ = win.CoCreateInstance(
         &win.CLSID_CUIAutomation,
         null,
@@ -17,8 +16,7 @@ pub fn init() void {
         @ptrCast(&g_uia),
     );
 
-    // Cap cross-process IPC: this thread hosts the low-level keyboard hook, so
-    // an unbounded UIA call against a busy/hung app would stall system-wide input.
+    // Limit cross-process IPC duration to prevent hook thread hangs
     if (g_uia) |uia| {
         var uia2: ?*win.IUIAutomation2 = null;
         if (uia.lpVtbl.QueryInterface(uia, &win.IID_IUIAutomation2, @ptrCast(&uia2)) == 0 and uia2 != null) {
@@ -29,6 +27,7 @@ pub fn init() void {
     }
 }
 
+/// Releases the global UI Automation instance.
 pub fn deinit() void {
     if (g_uia) |u| {
         _ = u.lpVtbl.Release(u);
@@ -36,14 +35,14 @@ pub fn deinit() void {
     }
 }
 
-/// Win32 caret -> UIA text selection -> mouse; each tier clamped to the work area.
+/// Resolves HUD anchor position: Win32 caret -> UIA selection -> Mouse cursor.
 pub fn resolveAnchor(dpi_scale: f32) geometry.Point {
     const hwnd_fg = c.GetForegroundWindow();
     if (hwnd_fg != null) {
         var thread_id: c.DWORD = 0;
         _ = c.GetWindowThreadProcessId(hwnd_fg, &thread_id);
 
-        // Tier 1: native Win32 caret (classic Edit controls, Notepad).
+        // Tier 1: Classic Win32 caret (Notepad, standard edit controls)
         var gui_info = std.mem.zeroes(c.GUITHREADINFO);
         gui_info.cbSize = @sizeOf(c.GUITHREADINFO);
         if (c.GetGUIThreadInfo(thread_id, &gui_info) != 0) {
@@ -58,7 +57,7 @@ pub fn resolveAnchor(dpi_scale: f32) geometry.Point {
             }
         }
 
-        // Tier 2: modern apps (Chromium/VS Code/Terminal) via UI Automation.
+        // Tier 2: Modern apps (Chromium, VS Code, Windows Terminal) via UIA
         if (queryUiaCaret()) |uia_pt| {
             var pt = uia_pt;
             pt.y += geometry.scaleInt(config.caret_bottom_gap, dpi_scale);
@@ -66,7 +65,7 @@ pub fn resolveAnchor(dpi_scale: f32) geometry.Point {
         }
     }
 
-    // Tier 3: fall back below-right of the mouse cursor.
+    // Tier 3: Fallback near mouse cursor
     var mouse_pt: c.POINT = undefined;
     _ = c.GetCursorPos(&mouse_pt);
     const fallback = geometry.Point{
@@ -76,6 +75,7 @@ pub fn resolveAnchor(dpi_scale: f32) geometry.Point {
     return clampWithMonitor(fallback, dpi_scale);
 }
 
+/// Queries text selection bounds from the focused UI Automation element.
 fn queryUiaCaret() ?geometry.Point {
     const uia = g_uia orelse return null;
 
@@ -83,8 +83,6 @@ fn queryUiaCaret() ?geometry.Point {
     if (uia.lpVtbl.GetFocusedElement(uia, &elem) != 0 or elem == null) return null;
     defer _ = elem.?.lpVtbl.Release(elem.?);
 
-    // Patterns are NOT reachable via QueryInterface on the client proxy;
-    // must go through GetCurrentPatternAs (slot 14, verified vs official SDK).
     var pattern_unk: ?*anyopaque = null;
     if (elem.?.lpVtbl.GetCurrentPatternAs(elem.?, win.UIA_TextPatternId, &win.IID_IUIAutomationTextPattern, &pattern_unk) != 0 or pattern_unk == null) return null;
     const text_pattern: *win.IUIAutomationTextPattern = @ptrCast(@alignCast(pattern_unk.?));
@@ -105,9 +103,7 @@ fn queryUiaCaret() ?geometry.Point {
     var psa: ?*win.SafeArray = null;
     _ = range.?.lpVtbl.GetBoundingRectangles(range.?, &psa);
 
-    // Degenerate (collapsed caret) ranges return an empty array in some
-    // providers (e.g. Windows Terminal); expand by one character and retry.
-    // The range is our own copy, so this never touches the app's real selection.
+    // Expand collapsed selection by one character if bounding rect is empty
     if (psa == null or psa.?.cDims < 1 or psa.?.rgsabound[0].cElements < 4) {
         if (psa) |p| _ = win.SafeArrayDestroy(p);
         psa = null;
@@ -118,7 +114,7 @@ fn queryUiaCaret() ?geometry.Point {
     if (psa == null) return null;
     defer _ = win.SafeArrayDestroy(psa.?);
 
-    // Guard against empty/malformed arrays before touching pvData.
+    // Validate SafeArray element properties (expecting double array)
     if (psa.?.cDims < 1 or psa.?.cbElements != 8 or psa.?.rgsabound[0].cElements < 4) return null;
 
     var p_data: ?*anyopaque = null;
@@ -129,6 +125,7 @@ fn queryUiaCaret() ?geometry.Point {
     const bx = bounds[0];
     const by = bounds[1];
     const bh = bounds[3]; // [left, top, width, height]
+
     if (!std.math.isFinite(bx) or !std.math.isFinite(by) or !std.math.isFinite(bh)) return null;
     if (bx <= 0 and by <= 0) return null;
     if (bh <= 0 or bh > 4096) return null;
@@ -136,6 +133,7 @@ fn queryUiaCaret() ?geometry.Point {
     return .{ .x = @intFromFloat(bx), .y = @intFromFloat(by + bh) };
 }
 
+/// Clamps target coordinate inside monitor work area bounds.
 fn clampWithMonitor(pt: geometry.Point, dpi_scale: f32) geometry.Point {
     const hmon = c.MonitorFromPoint(c.POINT{ .x = pt.x, .y = pt.y }, c.MONITOR_DEFAULTTONEAREST);
     var mi = std.mem.zeroes(c.MONITORINFO);

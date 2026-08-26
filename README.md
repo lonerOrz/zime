@@ -10,12 +10,16 @@ Existing tools kept adding AI features nobody asked for, on top of clunky popups
 2. Extract and run `zime.exe`.
 3. Enable _Autostart_ from the tray menu to launch it on login.
 
-## Building
+## Building from Source
 
-Requires [Zig 0.16](https://ziglang.org). Runs on Windows 10 and later.
+Requires [Zig](https://ziglang.org/download/) 0.16.
 
-```
-zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSmall
+```sh
+# Build release binary (output at zig-out/bin/zime.exe)
+zig build -Doptimize=ReleaseFast -Dstrip=true -Dtarget=x86_64-windows-gnu
+
+# Run tests
+zig build test -Dtarget=x86_64-windows-gnu
 ```
 
 PRs are welcome.

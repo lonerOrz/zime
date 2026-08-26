@@ -4,7 +4,7 @@ pub const c = @cImport({
     @cInclude("shellapi.h");
 });
 
-// GDI+ Flat API — shipped with Windows (gdiplus.dll), zero external deps.
+// GDI+ Flat API definitions
 pub const GdiplusStartupInput = extern struct {
     GdiplusVersion: u32 = 1,
     DebugEventCallback: ?*anyopaque = null,
@@ -47,19 +47,16 @@ pub extern "gdiplus" fn GdipCreatePen1(color: u32, width: f32, unit: c_int, pen:
 pub extern "gdiplus" fn GdipDeletePen(pen: *anyopaque) callconv(.winapi) c_int;
 pub extern "gdiplus" fn GdipDrawPath(graphics: *anyopaque, pen: *anyopaque, path: *anyopaque) callconv(.winapi) c_int;
 
-// Registry — hand-declared because translate-c's HKEY (aligned [*c]) chokes on
-// the integer root-key constants like HKEY_CURRENT_USER (0x80000001).
+// Registry API declarations
 pub extern "advapi32" fn RegOpenKeyExW(hkey: *anyopaque, subkey: [*:0]const u16, options: u32, access: u32, result: **anyopaque) callconv(.winapi) c_int;
 pub extern "advapi32" fn RegQueryValueExW(hkey: *anyopaque, name: [*:0]const u16, reserved: ?*u32, typ: ?*u32, data: ?*anyopaque, cb: ?*u32) callconv(.winapi) c_int;
+pub extern "advapi32" fn RegSetValueExW(hkey: *anyopaque, name: [*:0]const u16, reserved: u32, typ: u32, data: *const anyopaque, cb: u32) callconv(.winapi) c_int;
 pub extern "advapi32" fn RegSetKeyValueW(hkey: *anyopaque, subkey: ?[*:0]const u16, name: [*:0]const u16, typ: u32, data: *const anyopaque, cb: u32) callconv(.winapi) c_int;
 pub extern "advapi32" fn RegDeleteValueW(hkey: *anyopaque, name: [*:0]const u16) callconv(.winapi) c_int;
 pub extern "advapi32" fn RegCloseKey(hkey: *anyopaque) callconv(.winapi) c_int;
 pub const HKCU_VALUE: *anyopaque = @ptrFromInt(0x80000001); // HKEY_CURRENT_USER
 
-// COM / UI Automation — caret tracking for apps that draw their own cursor.
-// Only the vtable slots we actually call are typed; slot positions match
-// UIAutomationClient.h exactly (omitted methods stay out of the way because we
-// reach patterns through QueryInterface instead of GetCurrentPattern).
+// OLE SafeArray structures
 pub const SAFEARRAYBOUND = extern struct {
     cElements: u32,
     lLbound: i32,
@@ -74,17 +71,16 @@ pub const SafeArray = extern struct {
     rgsabound: [1]SAFEARRAYBOUND,
 };
 
-// CLSID_CUIAutomation as registered on real Windows (matches MinGW header).
+// UI Automation GUIDs
 pub const CLSID_CUIAutomation = c.GUID{ .Data1 = 0xff48dba4, .Data2 = 0x60ef, .Data3 = 0x4201, .Data4 = .{ 0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e } };
 pub const IID_IUIAutomation = c.GUID{ .Data1 = 0x30cbe57d, .Data2 = 0xd9d0, .Data3 = 0x452a, .Data4 = .{ 0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee } };
 pub const IID_IUIAutomationTextPattern = c.GUID{ .Data1 = 0x32eba289, .Data2 = 0x3583, .Data3 = 0x42c9, .Data4 = .{ 0x9c, 0x59, 0x3b, 0x6d, 0x9a, 0x1e, 0x9b, 0x6a } };
-// Official SDK value; IUIAutomation2 caps cross-process IPC so a hung provider
-// cannot stall this (hook-hosting) thread.
 pub const IID_IUIAutomation2 = c.GUID{ .Data1 = 0x34723aff, .Data2 = 0x0c9d, .Data3 = 0x49d0, .Data4 = .{ 0x98, 0x96, 0x7a, 0xb5, 0x2d, 0xf8, 0xcd, 0x8a } };
 
 pub const UIA_TextPatternId: c_int = 10014;
 pub const TextUnit_Character: c_int = 0;
 
+// UI Automation COM interfaces
 pub const IUIAutomationElement = extern struct {
     lpVtbl: *const extern struct {
         QueryInterface: *anyopaque,
@@ -156,21 +152,23 @@ pub const IUIAutomation = extern struct {
     },
 };
 
-// Slots 0-57 except Release unused (all of IUIAutomation + AutoSetFocus/
-// get_ConnectionTimeout); only the timeout setters are typed (verified vs
-// official UIAutomationClient.h).
+// Slots 0-2: IUnknown, 3-57: IUIAutomation (53 methods + 2 AutoSetFocus),
+// 58: get_ConnectionTimeout, 59: put_ConnectionTimeout,
+// 60: get_TransactionTimeout, 61: put_TransactionTimeout.
 pub const IUIAutomation2 = extern struct {
     lpVtbl: *const extern struct {
         QueryInterface: *anyopaque,
         AddRef: *anyopaque,
         Release: *const fn (*IUIAutomation2) callconv(.winapi) c.ULONG,
         reserved: [55]*anyopaque,
+        get_ConnectionTimeout: *anyopaque,
         put_ConnectionTimeout: *const fn (*IUIAutomation2, timeout_ms: c.DWORD) callconv(.winapi) c.HRESULT,
         get_TransactionTimeout: *anyopaque,
         put_TransactionTimeout: *const fn (*IUIAutomation2, timeout_ms: c.DWORD) callconv(.winapi) c.HRESULT,
     },
 };
 
+// OLE and DPI awareness imports
 pub extern "ole32" fn CoInitializeEx(pvReserved: ?*anyopaque, dwCoInit: c.DWORD) callconv(.winapi) c.HRESULT;
 pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
 pub extern "ole32" fn CoCreateInstance(rclsid: *const c.GUID, pUnkOuter: ?*anyopaque, dwClsContext: c.DWORD, riid: *const c.GUID, ppv: *?*anyopaque) callconv(.winapi) c.HRESULT;
