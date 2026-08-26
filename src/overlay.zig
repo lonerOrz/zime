@@ -10,6 +10,7 @@ const c = win.c;
 var g_hwnd_overlay: c.HWND = null;
 var g_gdiplus_token: usize = 0;
 var g_lang: i18n.Language = .auto;
+var g_gdiplus_inited: bool = false;
 
 // Process-lifetime GDI+ resources
 var g_font_family: ?*anyopaque = null;
@@ -110,21 +111,9 @@ const RenderCache = struct {
 var g_cache = RenderCache{};
 
 /// Initializes GDI+, global brushes, and the layered HUD window.
+/// GDI+ is initialized lazily on first show() call.
 pub fn init(instance: c.HINSTANCE, lang: i18n.Language) void {
     g_lang = lang;
-    var gdi_input = win.GdiplusStartupInput{};
-    _ = win.GdiplusStartup(&g_gdiplus_token, &gdi_input, null);
-
-    _ = win.GdipCreateFontFamilyFromName(std.unicode.utf8ToUtf16LeStringLiteral("Microsoft YaHei UI").ptr, null, @ptrCast(&g_font_family));
-    _ = win.GdipCreateStringFormat(0, 0, @ptrCast(&g_str_format));
-    if (g_str_format) |sf| {
-        _ = win.GdipSetStringFormatAlign(sf, 1); // Center
-        _ = win.GdipSetStringFormatLineAlign(sf, 1); // Center
-    }
-
-    _ = win.GdipCreateSolidFill(config.color_bg, @ptrCast(&g_brush_bg));
-    _ = win.GdipCreateSolidFill(config.color_text_chinese, @ptrCast(&g_brush_zh));
-    _ = win.GdipCreateSolidFill(config.color_text_english, @ptrCast(&g_brush_en));
 
     const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ZimeOverlayHUD");
     var wc = std.mem.zeroes(c.WNDCLASSEXW);
@@ -156,24 +145,56 @@ pub fn setLanguage(lang: i18n.Language) void {
     g_cache.scale = 0;
 }
 
-/// Releases HUD window and GDI+ resources.
-pub fn deinit() void {
-    g_cache.release();
+/// Lazy GDI+ initialization — loads gdiplus.dll and creates all drawing resources.
+fn ensureGdiplus() bool {
+    if (g_gdiplus_inited) return g_font_family != null;
+    g_gdiplus_inited = true;
 
-    if (g_brush_en) |b| _ = win.GdipDeleteBrush(b);
-    if (g_brush_zh) |b| _ = win.GdipDeleteBrush(b);
-    if (g_brush_bg) |b| _ = win.GdipDeleteBrush(b);
-    if (g_str_format) |sf| _ = win.GdipDeleteStringFormat(sf);
-    if (g_font_family) |ff| _ = win.GdipDeleteFontFamily(ff);
-    if (g_gdiplus_token != 0) {
+    var gdi_input = win.GdiplusStartupInput{};
+    if (win.GdiplusStartup(&g_gdiplus_token, &gdi_input, null) != 0) return false;
+
+    if (win.GdipCreateFontFamilyFromName(std.unicode.utf8ToUtf16LeStringLiteral("Microsoft YaHei UI").ptr, null, @ptrCast(&g_font_family)) != 0) {
         win.GdiplusShutdown(g_gdiplus_token);
         g_gdiplus_token = 0;
+        return false;
+    }
+
+    _ = win.GdipCreateStringFormat(0, 0, @ptrCast(&g_str_format));
+    if (g_str_format) |sf| {
+        _ = win.GdipSetStringFormatAlign(sf, 1); // Center
+        _ = win.GdipSetStringFormatLineAlign(sf, 1); // Center
+    }
+
+    _ = win.GdipCreateSolidFill(config.color_bg, @ptrCast(&g_brush_bg));
+    _ = win.GdipCreateSolidFill(config.color_text_chinese, @ptrCast(&g_brush_zh));
+    _ = win.GdipCreateSolidFill(config.color_text_english, @ptrCast(&g_brush_en));
+
+    return true;
+}
+
+/// Releases HUD window and GDI+ resources.
+pub fn deinit() void {
+    caret.deinit();
+    g_cache.release();
+
+    if (g_gdiplus_inited) {
+        if (g_brush_en) |b| _ = win.GdipDeleteBrush(b);
+        if (g_brush_zh) |b| _ = win.GdipDeleteBrush(b);
+        if (g_brush_bg) |b| _ = win.GdipDeleteBrush(b);
+        if (g_str_format) |sf| _ = win.GdipDeleteStringFormat(sf);
+        if (g_font_family) |ff| _ = win.GdipDeleteFontFamily(ff);
+        if (g_gdiplus_token != 0) {
+            win.GdiplusShutdown(g_gdiplus_token);
+            g_gdiplus_token = 0;
+        }
     }
 }
 
 /// Renders and displays the indicator pill near active caret.
 pub fn show(state: ime.ImeState) void {
     const hwnd = g_hwnd_overlay orelse return;
+
+    if (!ensureGdiplus()) return;
 
     const dpi = win.GetDpiForWindow(hwnd);
     const dpi_scale: f32 = @as(f32, @floatFromInt(if (dpi > 0) dpi else 96)) / 96.0;

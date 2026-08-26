@@ -4,15 +4,17 @@ const config = @import("config.zig");
 const geometry = @import("geometry.zig");
 const c = win.c;
 
-/// Lazy COM+UIA state — only held while queryUiaCaret is running.
+/// Lazy COM+UIA state — initialized on first Tier-2 query.
 var g_uia: ?*win.IUIAutomation = null;
-var g_com_inited: bool = false;
+var g_uia_inited: bool = false;
 
-/// Initializes the UI Automation client and caps IPC timeout.
-fn ensureCom() void {
-    if (g_com_inited) return;
+/// Ensures COM is initialized and the UI Automation singleton is created.
+/// Returns false if COM initialization or object creation fails.
+fn ensureUia() bool {
+    if (g_uia_inited) return g_uia != null;
+    g_uia_inited = true;
+
     _ = win.CoInitializeEx(null, c.COINIT_APARTMENTTHREADED);
-    g_com_inited = true;
     _ = win.CoCreateInstance(
         &win.CLSID_CUIAutomation,
         null,
@@ -20,6 +22,7 @@ fn ensureCom() void {
         &win.IID_IUIAutomation,
         @ptrCast(&g_uia),
     );
+
     if (g_uia) |uia| {
         var uia2: ?*win.IUIAutomation2 = null;
         if (uia.lpVtbl.QueryInterface(uia, &win.IID_IUIAutomation2, @ptrCast(&uia2)) == 0 and uia2 != null) {
@@ -28,16 +31,18 @@ fn ensureCom() void {
             _ = uia2.?.lpVtbl.put_TransactionTimeout(uia2.?, config.uia_ipc_timeout_ms);
         }
     }
+    return g_uia != null;
 }
 
-fn releaseCom() void {
+/// Releases the UI Automation instance and uninitializes COM.
+pub fn deinit() void {
     if (g_uia) |u| {
         _ = u.lpVtbl.Release(u);
         g_uia = null;
     }
-    if (g_com_inited) {
+    if (g_uia_inited) {
         win.CoUninitialize();
-        g_com_inited = false;
+        g_uia_inited = false;
     }
 }
 
@@ -83,8 +88,7 @@ pub fn resolveAnchor(dpi_scale: f32) geometry.Point {
 
 /// Queries text selection bounds from the focused UI Automation element.
 fn queryUiaCaret() ?geometry.Point {
-    ensureCom();
-    defer releaseCom();
+    if (!ensureUia()) return null;
     const uia = g_uia orelse return null;
 
     var elem: ?*win.IUIAutomationElement = null;
