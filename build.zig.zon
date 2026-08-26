@@ -1,7 +1,7 @@
 .{
     .name = .zime,
-    .version = "0.1.0",
-    .fingerprint = 0x8f4bef76fac947f8,
+    .version = "0.2.0",
+    .fingerprint = 0x8f4bef76f11ad109,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
