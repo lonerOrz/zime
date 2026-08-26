@@ -1,6 +1,7 @@
 # Zime
 
 A Windows input method indicator that shows a small pill when you switch input methods.
+
 Existing tools kept adding AI features nobody asked for, on top of clunky popups, dated UI and ads. Zime does one thing and stays out of the way.
 
 ## Installation

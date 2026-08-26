@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Strip debug info from the binary") orelse false;
 
     const exe = b.addExecutable(.{
         .name = "zime",
@@ -11,6 +12,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true, // pulls in MinGW headers for @cImport
+            .strip = strip,
         }),
     });
 
