@@ -17,6 +17,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    exe.root_module.addWin32ResourceFile(.{
+        .file = b.path("res/zime.rc"),
+    });
+
     exe.subsystem = .Windows;
 
     // Link required Windows system libraries

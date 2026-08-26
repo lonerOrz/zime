@@ -31,3 +31,4 @@ pub const TIMER_AUTOHIDE: usize = 201;
 pub const MENU_TRAY_EXIT: usize = 301;
 pub const MENU_TRAY_AUTOSTART: usize = 302;
 pub const MENU_TRAY_RESTART: usize = 303;
+pub const IDI_APP_ICON: usize = 1;

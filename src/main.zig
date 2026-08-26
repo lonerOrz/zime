@@ -11,7 +11,15 @@ const ID_TIMER_AUTOHIDE: usize = config.TIMER_AUTOHIDE;
 const ID_TRAY_EXIT: usize = config.MENU_TRAY_EXIT;
 const ID_TRAY_AUTOSTART: usize = config.MENU_TRAY_AUTOSTART;
 const ID_TRAY_RESTART: usize = config.MENU_TRAY_RESTART;
-const IDI_INFORMATION: usize = 32516;
+
+/// 将资源 ID 整数转换为 LPCWSTR 指针（Win32 整数资源标识符约定）
+fn makeResourcePtr(id: usize) [*c]const c_ushort {
+    const u = union(enum) {
+        i: usize,
+        p: [*c]const c_ushort,
+    };
+    return @unionInit(u, "p", id).p;
+}
 
 var g_hwnd_main: c.HWND = null;
 var g_nid: c.NOTIFYICONDATAW = undefined;
@@ -138,11 +146,11 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
 
 pub fn main() !void {
     // Initialize COM for UI Automation caret query
-    _ = win.CoInitializeEx(null, 0x2); // COINIT_APARTMENTTHREADED
+    _ = win.CoInitializeEx(null, 0x2);
     defer win.CoUninitialize();
 
     // Enable Per-Monitor DPI Awareness V2
-    _ = win.SetProcessDpiAwarenessContext(-4); // PER_MONITOR_AWARE_V2
+    _ = win.SetProcessDpiAwarenessContext(-4);
 
     // Enforce single instance
     g_h_mutex = c.CreateMutexW(null, c.TRUE, std.unicode.utf8ToUtf16LeStringLiteral("Zime_SingleInstance"));
@@ -157,6 +165,27 @@ pub fn main() !void {
 
     const instance: c.HINSTANCE = @ptrCast(c.GetModuleHandleW(null));
 
+    // Load app icons (large for window class, small for tray)
+    const raw_icon_big = c.LoadImageW(
+        instance,
+        makeResourcePtr(config.IDI_APP_ICON),
+        c.IMAGE_ICON,
+        0,
+        0,
+        c.LR_DEFAULTCOLOR,
+    );
+    const h_icon_big: c.HICON = if (raw_icon_big) |h| @ptrFromInt(@intFromPtr(h)) else @ptrFromInt(0);
+
+    const raw_icon_sm = c.LoadImageW(
+        instance,
+        makeResourcePtr(config.IDI_APP_ICON),
+        c.IMAGE_ICON,
+        0,
+        0,
+        c.LR_DEFAULTCOLOR,
+    );
+    const h_icon_sm: c.HICON = if (raw_icon_sm) |h| @ptrFromInt(@intFromPtr(h)) else @ptrFromInt(0);
+
     // Register and create hidden host window
     const main_cls = std.unicode.utf8ToUtf16LeStringLiteral("ZimeEventHost");
     var wc = std.mem.zeroes(c.WNDCLASSEXW);
@@ -164,13 +193,26 @@ pub fn main() !void {
     wc.lpfnWndProc = windowProc;
     wc.hInstance = instance;
     wc.lpszClassName = main_cls.ptr;
+    wc.hIcon = h_icon_big;
+    wc.hIconSm = h_icon_sm;
     _ = c.RegisterClassExW(&wc);
-    g_hwnd_main = c.CreateWindowExW(0, main_cls.ptr, main_cls.ptr, 0, 0, 0, 0, 0, null, null, instance, null);
+    g_hwnd_main = c.CreateWindowExW(
+        c.WS_EX_TOOLWINDOW | c.WS_EX_APPWINDOW,
+        main_cls.ptr,
+        main_cls.ptr,
+        0,
+        0,
+        0,
+        0,
+        0,
+        null,
+        null,
+        instance,
+        null,
+    );
 
     overlay.init(instance);
     defer overlay.deinit();
-
-    g_last_state = ime.queryCurrentState();
 
     // Setup system tray icon
     g_nid = std.mem.zeroes(c.NOTIFYICONDATAW);
@@ -179,16 +221,8 @@ pub fn main() !void {
     g_nid.uID = 1;
     g_nid.uFlags = c.NIF_ICON | c.NIF_MESSAGE | c.NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAY;
+    g_nid.hIcon = h_icon_sm;
 
-    const cx_icon = c.GetSystemMetrics(c.SM_CXSMICON);
-    g_nid.hIcon = overlay.createTrayIcon(cx_icon) orelse @ptrCast(@alignCast(c.LoadImageW(
-        null,
-        @as([*:0]const u16, @ptrFromInt(IDI_INFORMATION)),
-        c.IMAGE_ICON,
-        cx_icon,
-        cx_icon,
-        c.LR_SHARED,
-    )));
     const tip = std.unicode.utf8ToUtf16LeStringLiteral("Zime 输入法指示器");
     @memcpy(g_nid.szTip[0..tip.len], tip);
     _ = c.Shell_NotifyIconW(c.NIM_ADD, &g_nid);

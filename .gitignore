@@ -26,3 +26,5 @@ result-*
 .direnv/
 .envrc
 
+# Project
+res/zime.png
