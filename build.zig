@@ -1,66 +1,65 @@
 const std = @import("std");
 
+/// Build script for Zime IME Indicator
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const strip = b.option(bool, "strip", "Strip debug info from the binary") orelse false;
+
+    // Create root application module
+    const root_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    // Link required Windows system libraries
+    root_mod.linkSystemLibrary("user32", .{});
+    root_mod.linkSystemLibrary("gdi32", .{});
+    root_mod.linkSystemLibrary("gdiplus", .{});
+    root_mod.linkSystemLibrary("imm32", .{});
+    root_mod.linkSystemLibrary("ole32", .{});
+    root_mod.linkSystemLibrary("oleaut32", .{});
+    root_mod.linkSystemLibrary("oleacc", .{});
+    root_mod.linkSystemLibrary("advapi32", .{});
+    root_mod.linkSystemLibrary("shell32", .{});
+
+    // Embed application resource file
+    root_mod.addWin32ResourceFile(.{
+        .file = b.path("res/zime.rc"),
+    });
 
     // Main executable definition
     const exe = b.addExecutable(.{
         .name = "zime",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true, // Required for MinGW C headers in @cImport
-            .strip = strip,
-        }),
+        .root_module = root_mod,
     });
 
-    exe.root_module.addWin32ResourceFile(.{
-        .file = b.path("res/zime.rc"),
-    });
-
+    // Windows GUI subsystem
     exe.subsystem = .Windows;
-
-    // Link required Windows system libraries
-    const system_libs = [_][]const u8{
-        "user32",
-        "gdi32",
-        "gdiplus",
-        "imm32",
-        "shell32",
-        "ole32",
-        "oleaut32",
-        "advapi32",
-    };
-    for (system_libs) |lib| {
-        exe.root_module.linkSystemLibrary(lib, .{});
-    }
 
     b.installArtifact(exe);
 
-    // Target-agnostic unit tests for pure calculations
+    // Run step
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+    const run_step = b.step("run", "Run the application");
+    run_step.dependOn(&run_cmd.step);
+
+    // Unit tests configuration
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/geometry.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
     const unit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/geometry.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = test_mod,
     });
-
     const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run pure calculation unit tests");
+    const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
-
-    // i18n tests
-    const i18n_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/i18n.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    const run_i18n_tests = b.addRunArtifact(i18n_tests);
-    test_step.dependOn(&run_i18n_tests.step);
 }

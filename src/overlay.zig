@@ -1,3 +1,5 @@
+//! Layered HUD overlay rendering using GDI+ and per-pixel alpha blending.
+
 const std = @import("std");
 const win = @import("win.zig");
 const ime = @import("ime.zig");
@@ -12,16 +14,15 @@ var g_gdiplus_token: usize = 0;
 var g_lang: i18n.Language = .auto;
 var g_gdiplus_inited: bool = false;
 
-// Process-lifetime GDI+ resources
 var g_font_family: ?*anyopaque = null;
 var g_str_format: ?*anyopaque = null;
 var g_brush_bg: ?*anyopaque = null;
 var g_brush_zh: ?*anyopaque = null;
 var g_brush_en: ?*anyopaque = null;
 
-/// DPI-keyed cache to avoid GDI/GDI+ allocations during steady-state rendering.
 const RenderCache = struct {
     scale: f32 = 0.0,
+    text_w: i32 = 0,
     width_px: i32 = 0,
     height_px: i32 = 0,
     hdc_mem: ?c.HDC = null,
@@ -30,7 +31,6 @@ const RenderCache = struct {
     graphics: ?*anyopaque = null,
     font: ?*anyopaque = null,
     path_pill: ?*anyopaque = null,
-    state: ime.ImeState = .english,
 
     fn release(self: *RenderCache) void {
         if (self.path_pill) |p| _ = win.GdipDeletePath(p);
@@ -41,16 +41,15 @@ const RenderCache = struct {
         self.* = .{};
     }
 
-    fn ensure(self: *RenderCache, dpi_scale: f32, hdc_screen: c.HDC, text_width: i32, state: ime.ImeState) !bool {
-        if (self.scale == dpi_scale and self.width_px == text_width and self.hdc_mem != null and self.state == state) return false;
+    fn ensure(self: *RenderCache, dpi_scale: f32, hdc_screen: c.HDC, text_width: i32) !bool {
+        if (self.scale == dpi_scale and self.text_w == text_width and self.hdc_mem != null) {
+            return false;
+        }
         self.release();
 
         const font_family = g_font_family orelse return error.NoFontFamily;
 
-        const h = geometry.scaleInt(
-            config.base_font_size + config.padding_top + config.padding_bottom,
-            dpi_scale,
-        );
+        const h = geometry.scaleInt(config.base_font_size + config.padding_top + config.padding_bottom, dpi_scale);
         const w = text_width + geometry.scaleInt(config.padding_left + config.padding_right, dpi_scale);
         const radius = geometry.scale(config.base_corner_radius, dpi_scale);
         const fw: f32 = @floatFromInt(w);
@@ -59,7 +58,6 @@ const RenderCache = struct {
         const mem_dc = c.CreateCompatibleDC(hdc_screen) orelse return error.CreateDcFailed;
         errdefer _ = c.DeleteDC(mem_dc);
 
-        // Top-down 32bpp DIB section
         var bmi = std.mem.zeroes(c.BITMAPINFO);
         bmi.bmiHeader.biSize = @sizeOf(c.BITMAPINFOHEADER);
         bmi.bmiHeader.biWidth = w;
@@ -76,11 +74,11 @@ const RenderCache = struct {
         var gfx: *anyopaque = undefined;
         if (win.GdipCreateFromHDC(mem_dc, &gfx) != 0) return error.CreateGraphicsFailed;
         errdefer _ = win.GdipDeleteGraphics(gfx);
-        _ = win.GdipSetSmoothingMode(gfx, 4); // AntiAlias
-        _ = win.GdipSetTextRenderingHint(gfx, 4); // AntiAliasGridFit
+        _ = win.GdipSetSmoothingMode(gfx, 4);
+        _ = win.GdipSetTextRenderingHint(gfx, 4);
 
         var font_obj: *anyopaque = undefined;
-        if (win.GdipCreateFont(font_family, geometry.scale(config.base_font_size, dpi_scale), 1, 2, &font_obj) != 0) return error.CreateFontFailed; // Bold, UnitPixel
+        if (win.GdipCreateFont(font_family, geometry.scale(config.base_font_size, dpi_scale), 1, 2, &font_obj) != 0) return error.CreateFontFailed;
         errdefer _ = win.GdipDeleteFont(font_obj);
 
         var path: *anyopaque = undefined;
@@ -95,6 +93,7 @@ const RenderCache = struct {
         _ = win.GdipClosePathFigure(path);
 
         self.scale = dpi_scale;
+        self.text_w = text_width;
         self.width_px = w;
         self.height_px = h;
         self.hdc_mem = mem_dc;
@@ -103,15 +102,12 @@ const RenderCache = struct {
         self.graphics = gfx;
         self.font = font_obj;
         self.path_pill = path;
-        self.state = state;
         return true;
     }
 };
 
 var g_cache = RenderCache{};
 
-/// Initializes GDI+, global brushes, and the layered HUD window.
-/// GDI+ is initialized lazily on first show() call.
 pub fn init(instance: c.HINSTANCE, lang: i18n.Language) void {
     g_lang = lang;
 
@@ -139,13 +135,11 @@ pub fn init(instance: c.HINSTANCE, lang: i18n.Language) void {
     );
 }
 
-/// Updates the language used by the overlay (called from main when user changes language).
 pub fn setLanguage(lang: i18n.Language) void {
     g_lang = lang;
     g_cache.scale = 0;
 }
 
-/// Lazy GDI+ initialization — loads gdiplus.dll and creates all drawing resources.
 fn ensureGdiplus() bool {
     if (g_gdiplus_inited) return g_font_family != null;
     g_gdiplus_inited = true;
@@ -161,8 +155,8 @@ fn ensureGdiplus() bool {
 
     _ = win.GdipCreateStringFormat(0, 0, @ptrCast(&g_str_format));
     if (g_str_format) |sf| {
-        _ = win.GdipSetStringFormatAlign(sf, 1); // Center
-        _ = win.GdipSetStringFormatLineAlign(sf, 1); // Center
+        _ = win.GdipSetStringFormatAlign(sf, 1);
+        _ = win.GdipSetStringFormatLineAlign(sf, 1);
     }
 
     _ = win.GdipCreateSolidFill(config.color_bg, @ptrCast(&g_brush_bg));
@@ -172,7 +166,6 @@ fn ensureGdiplus() bool {
     return true;
 }
 
-/// Releases HUD window and GDI+ resources.
 pub fn deinit() void {
     caret.deinit();
     g_cache.release();
@@ -190,11 +183,38 @@ pub fn deinit() void {
     }
 }
 
-/// Renders and displays the indicator pill near active caret.
-pub fn show(state: ime.ImeState) void {
-    const hwnd = g_hwnd_overlay orelse return;
+pub fn clampWithMonitor(pt: geometry.Point, dpi_scale: f32, text_width: i32) geometry.Point {
+    const hmon = c.MonitorFromPoint(c.POINT{ .x = pt.x, .y = pt.y }, c.MONITOR_DEFAULTTONEAREST);
+    var mi = std.mem.zeroes(c.MONITORINFO);
+    mi.cbSize = @sizeOf(c.MONITORINFO);
+    if (c.GetMonitorInfoW(hmon, &mi) != 0) {
+        return geometry.clampToWorkArea(pt, dpi_scale, .{
+            .left = mi.rcWork.left,
+            .top = mi.rcWork.top,
+            .right = mi.rcWork.right,
+            .bottom = mi.rcWork.bottom,
+        }, text_width);
+    }
+    return pt;
+}
 
-    if (!ensureGdiplus()) return;
+/// Ultra-lightweight window translation for mouse follow mode.
+pub fn updateMousePosition(mouse_x: i32, mouse_y: i32) void {
+    const hwnd = g_hwnd_overlay orelse return;
+    const dpi = win.GetDpiForWindow(hwnd);
+    const dpi_scale: f32 = @as(f32, @floatFromInt(if (dpi > 0) dpi else 96)) / 96.0;
+
+    const raw_pt = geometry.Point{
+        .x = mouse_x + geometry.scaleInt(config.mouse_offset_x, dpi_scale),
+        .y = mouse_y + geometry.scaleInt(config.mouse_offset_y, dpi_scale),
+    };
+    const pt = clampWithMonitor(raw_pt, dpi_scale, g_cache.text_w);
+    _ = win.SetWindowPos(hwnd, win.HWND_TOPMOST, pt.x, pt.y, 0, 0, c.SWP_NOSIZE | c.SWP_NOACTIVATE | c.SWP_SHOWWINDOW);
+}
+
+pub fn show(state: ime.ImeState, mode: config.IndicatorMode) bool {
+    const hwnd = g_hwnd_overlay orelse return false;
+    if (!ensureGdiplus()) return false;
 
     const dpi = win.GetDpiForWindow(hwnd);
     const dpi_scale: f32 = @as(f32, @floatFromInt(if (dpi > 0) dpi else 96)) / 96.0;
@@ -213,13 +233,39 @@ pub fn show(state: ime.ImeState) void {
         else
             std.unicode.utf8ToUtf16LeStringLiteral("E"),
     };
-    const text_width = measureTextWidth(dpi_scale, text);
 
-    const size_changed = g_cache.ensure(dpi_scale, hdc_screen, text_width, state) catch return;
+    const text_width = measureTextWidth(dpi_scale, text);
+    var pt: geometry.Point = undefined;
+
+    switch (mode) {
+        .caret_focus => {
+            const anchor_opt = caret.resolveAnchor(dpi_scale, text_width);
+            if (anchor_opt == null) {
+                hide();
+                return false;
+            }
+            const anchor = anchor_opt.?;
+            if (!anchor.is_caret) {
+                hide();
+                return false;
+            }
+            pt = anchor.point;
+        },
+        .mouse_follow => {
+            var mouse_pt = c.POINT{ .x = 0, .y = 0 };
+            _ = c.GetCursorPos(&mouse_pt);
+            const raw_pt = geometry.Point{
+                .x = mouse_pt.x + geometry.scaleInt(config.mouse_offset_x, dpi_scale),
+                .y = mouse_pt.y + geometry.scaleInt(config.mouse_offset_y, dpi_scale),
+            };
+            pt = clampWithMonitor(raw_pt, dpi_scale, text_width);
+        },
+    }
+
+    _ = g_cache.ensure(dpi_scale, hdc_screen, text_width) catch return false;
     const cache = &g_cache;
     const w = cache.width_px;
     const h = cache.height_px;
-    if (size_changed) _ = c.MoveWindow(hwnd, -500, -500, w, h, c.FALSE);
     const graphics = cache.graphics.?;
 
     const buf_len = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
@@ -229,14 +275,11 @@ pub fn show(state: ime.ImeState) void {
     if (g_brush_bg) |b| _ = win.GdipFillPath(graphics, b, path);
 
     const text_brush = if (state == .chinese) g_brush_zh else g_brush_en;
-
     if (text_brush) |tb| {
         const layout_rect = win.RectF{ .X = 0, .Y = 0, .Width = @floatFromInt(w), .Height = @floatFromInt(h) };
         const text_len = @as(c_int, @intCast(std.mem.len(text)));
         _ = win.GdipDrawString(graphics, text, text_len, cache.font.?, &layout_rect, g_str_format.?, tb);
     }
-
-    const pt = caret.resolveAnchor(dpi_scale);
 
     var pt_src = c.POINT{ .x = 0, .y = 0 };
     var pt_dst = c.POINT{ .x = pt.x, .y = pt.y };
@@ -248,26 +291,31 @@ pub fn show(state: ime.ImeState) void {
         .AlphaFormat = c.AC_SRC_ALPHA,
     };
     _ = c.UpdateLayeredWindow(hwnd, hdc_screen, &pt_dst, &sz, cache.hdc_mem.?, &pt_src, 0, &blend, c.ULW_ALPHA);
-    _ = c.ShowWindow(hwnd, c.SW_SHOWNOACTIVATE);
+    _ = win.SetWindowPos(hwnd, win.HWND_TOPMOST, pt.x, pt.y, w, h, c.SWP_NOACTIVATE | c.SWP_SHOWWINDOW);
+    return true;
 }
 
-/// Measures text width in pixels at the given DPI scale.
 fn measureTextWidth(dpi_scale: f32, text: [*:0]const u16) i32 {
     const font_family = g_font_family orelse return @intFromFloat(config.padding_left + config.padding_right);
     var font_obj: *anyopaque = undefined;
     const font_size = geometry.scale(config.base_font_size, dpi_scale);
-    if (win.GdipCreateFont(font_family, font_size, 1, 2, &font_obj) != 0) return @intFromFloat(config.padding_left + config.padding_right);
+    if (win.GdipCreateFont(font_family, font_size, 1, 2, &font_obj) != 0) {
+        return @intFromFloat(config.padding_left + config.padding_right);
+    }
     defer _ = win.GdipDeleteFont(font_obj);
 
-    var gfx: *anyopaque = undefined;
     const mem_dc = c.CreateCompatibleDC(null) orelse return @intFromFloat(config.padding_left + config.padding_right);
     defer _ = c.DeleteDC(mem_dc);
+
+    var gfx: *anyopaque = undefined;
     if (win.GdipCreateFromHDC(mem_dc, &gfx) != 0) return @intFromFloat(config.padding_left + config.padding_right);
+    defer _ = win.GdipDeleteGraphics(gfx);
 
     var bbox: win.RectF = undefined;
     _ = win.GdipMeasureString(gfx, text, @as(c_int, @intCast(std.mem.len(text))), font_obj, &win.RectF{ .X = 0, .Y = 0, .Width = 9999.0, .Height = 9999.0 }, null, &bbox, null, null);
     return @intFromFloat(@ceil(bbox.Width));
 }
+
 pub fn hide() void {
     if (g_hwnd_overlay != null) {
         _ = c.ShowWindow(g_hwnd_overlay, c.SW_HIDE);
