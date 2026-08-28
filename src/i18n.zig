@@ -44,7 +44,8 @@ pub const Strings = struct {
     menu_restart: [*:0]const u16,
     menu_exit: [*:0]const u16,
     menu_language: [*:0]const u16,
-    menu_only_input: [*:0]const u16,
+    menu_mode_caret: [*:0]const u16,
+    menu_mode_mouse: [*:0]const u16,
 };
 
 const STRINGS_EN = Strings{
@@ -53,7 +54,8 @@ const STRINGS_EN = Strings{
     .menu_restart = std.unicode.utf8ToUtf16LeStringLiteral("Restart Zime"),
     .menu_exit = std.unicode.utf8ToUtf16LeStringLiteral("Exit Zime"),
     .menu_language = std.unicode.utf8ToUtf16LeStringLiteral("Language"),
-    .menu_only_input = std.unicode.utf8ToUtf16LeStringLiteral("Only When Typing"),
+    .menu_mode_caret = std.unicode.utf8ToUtf16LeStringLiteral("Mode: Caret Focus & Switch"),
+    .menu_mode_mouse = std.unicode.utf8ToUtf16LeStringLiteral("Mode: Mouse Follow"),
 };
 
 const STRINGS_ZH = Strings{
@@ -62,11 +64,12 @@ const STRINGS_ZH = Strings{
     .menu_restart = std.unicode.utf8ToUtf16LeStringLiteral("重启 Zime"),
     .menu_exit = std.unicode.utf8ToUtf16LeStringLiteral("退出 Zime"),
     .menu_language = std.unicode.utf8ToUtf16LeStringLiteral("语言"),
-    .menu_only_input = std.unicode.utf8ToUtf16LeStringLiteral("仅在输入时提示"),
+    .menu_mode_caret = std.unicode.utf8ToUtf16LeStringLiteral("模式：光标聚焦与切换提示"),
+    .menu_mode_mouse = std.unicode.utf8ToUtf16LeStringLiteral("模式：鼠标常驻跟随"),
 };
 
 pub const I18n = struct {
-    pub const lang_subkey = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Zime");
+    pub const config_subkey = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Zime");
     pub const lang_value_name = std.unicode.utf8ToUtf16LeStringLiteral("language");
 
     const KEY_READ: u32 = 0x0001;
@@ -75,7 +78,7 @@ pub const I18n = struct {
     /// Loads the persisted language setting from Windows Registry.
     pub fn loadPersistedLanguage() Language {
         var hk: *anyopaque = undefined;
-        if (win.RegOpenKeyExW(win.HKCU_VALUE, lang_subkey.ptr, 0, KEY_READ, &hk) != 0) {
+        if (win.RegOpenKeyExW(win.HKCU_VALUE, config_subkey.ptr, 0, KEY_READ, &hk) != 0) {
             return .auto;
         }
         defer _ = win.RegCloseKey(hk);
@@ -97,7 +100,7 @@ pub const I18n = struct {
     /// Persists the selected language setting to Windows Registry.
     pub fn persistLanguage(lang: Language) void {
         var hk: *anyopaque = undefined;
-        if (win.RegCreateKeyExW(win.HKCU_VALUE, lang_subkey.ptr, 0, null, 0, KEY_WRITE, null, &hk, null) != 0) {
+        if (win.RegCreateKeyExW(win.HKCU_VALUE, config_subkey.ptr, 0, null, 0, KEY_WRITE, null, &hk, null) != 0) {
             return;
         }
         defer _ = win.RegCloseKey(hk);

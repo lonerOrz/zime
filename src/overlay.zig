@@ -183,7 +183,36 @@ pub fn deinit() void {
     }
 }
 
-pub fn show(state: ime.ImeState, only_on_input: bool) bool {
+pub fn clampWithMonitor(pt: geometry.Point, dpi_scale: f32, text_width: i32) geometry.Point {
+    const hmon = c.MonitorFromPoint(c.POINT{ .x = pt.x, .y = pt.y }, c.MONITOR_DEFAULTTONEAREST);
+    var mi = std.mem.zeroes(c.MONITORINFO);
+    mi.cbSize = @sizeOf(c.MONITORINFO);
+    if (c.GetMonitorInfoW(hmon, &mi) != 0) {
+        return geometry.clampToWorkArea(pt, dpi_scale, .{
+            .left = mi.rcWork.left,
+            .top = mi.rcWork.top,
+            .right = mi.rcWork.right,
+            .bottom = mi.rcWork.bottom,
+        }, text_width);
+    }
+    return pt;
+}
+
+/// Ultra-lightweight window translation for mouse follow mode.
+pub fn updateMousePosition(mouse_x: i32, mouse_y: i32) void {
+    const hwnd = g_hwnd_overlay orelse return;
+    const dpi = win.GetDpiForWindow(hwnd);
+    const dpi_scale: f32 = @as(f32, @floatFromInt(if (dpi > 0) dpi else 96)) / 96.0;
+
+    const raw_pt = geometry.Point{
+        .x = mouse_x + geometry.scaleInt(config.mouse_offset_x, dpi_scale),
+        .y = mouse_y + geometry.scaleInt(config.mouse_offset_y, dpi_scale),
+    };
+    const pt = clampWithMonitor(raw_pt, dpi_scale, g_cache.text_w);
+    _ = win.SetWindowPos(hwnd, win.HWND_TOPMOST, pt.x, pt.y, 0, 0, c.SWP_NOSIZE | c.SWP_NOACTIVATE | c.SWP_SHOWWINDOW);
+}
+
+pub fn show(state: ime.ImeState, mode: config.IndicatorMode) bool {
     const hwnd = g_hwnd_overlay orelse return false;
     if (!ensureGdiplus()) return false;
 
@@ -206,18 +235,31 @@ pub fn show(state: ime.ImeState, only_on_input: bool) bool {
     };
 
     const text_width = measureTextWidth(dpi_scale, text);
+    var pt: geometry.Point = undefined;
 
-    const anchor_opt = caret.resolveAnchor(dpi_scale, text_width);
-    if (anchor_opt == null) {
-        hide();
-        return false;
-    }
-    const anchor = anchor_opt.?;
-
-    // If "Only on Input" is active, suppress showing if no real caret was detected
-    if (only_on_input and !anchor.is_caret) {
-        hide();
-        return false;
+    switch (mode) {
+        .caret_focus => {
+            const anchor_opt = caret.resolveAnchor(dpi_scale, text_width);
+            if (anchor_opt == null) {
+                hide();
+                return false;
+            }
+            const anchor = anchor_opt.?;
+            if (!anchor.is_caret) {
+                hide();
+                return false;
+            }
+            pt = anchor.point;
+        },
+        .mouse_follow => {
+            var mouse_pt = c.POINT{ .x = 0, .y = 0 };
+            _ = c.GetCursorPos(&mouse_pt);
+            const raw_pt = geometry.Point{
+                .x = mouse_pt.x + geometry.scaleInt(config.mouse_offset_x, dpi_scale),
+                .y = mouse_pt.y + geometry.scaleInt(config.mouse_offset_y, dpi_scale),
+            };
+            pt = clampWithMonitor(raw_pt, dpi_scale, text_width);
+        },
     }
 
     _ = g_cache.ensure(dpi_scale, hdc_screen, text_width) catch return false;
@@ -239,7 +281,6 @@ pub fn show(state: ime.ImeState, only_on_input: bool) bool {
         _ = win.GdipDrawString(graphics, text, text_len, cache.font.?, &layout_rect, g_str_format.?, tb);
     }
 
-    const pt = anchor.point;
     var pt_src = c.POINT{ .x = 0, .y = 0 };
     var pt_dst = c.POINT{ .x = pt.x, .y = pt.y };
     var sz = c.SIZE{ .cx = w, .cy = h };

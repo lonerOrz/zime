@@ -1,5 +1,11 @@
 //! Global configuration and constants for layout, timers, styling, and IPC.
 
+/// Working mode of the IME indicator HUD
+pub const IndicatorMode = enum(u32) {
+    caret_focus = 0, // Mode 1: Caret Focus & Switch (Auto-hiding HUD at caret)
+    mouse_follow = 1, // Mode 2: Mouse Follow (Persistent HUD pinned to mouse cursor)
+};
+
 // Visual layout metrics (scaled by DPI at runtime)
 pub const padding_left: f32 = 8.0;
 pub const padding_right: f32 = 8.0;
@@ -30,6 +36,7 @@ pub const ime_msg_timeout_ms: u32 = 80;
 
 // Win32 message and timer identifiers
 pub const WM_TRAY_CALLBACK: u32 = 0x0400 + 1; // WM_USER + 1
+pub const WM_MOUSE_MOVE_NOTIFY: u32 = 0x0400 + 2; // WM_USER + 2
 pub const TIMER_DEBOUNCE_CHECK: usize = 101;
 pub const TIMER_AUTOHIDE: usize = 201;
 
@@ -40,7 +47,8 @@ pub const MENU_TRAY_RESTART: usize = 303;
 pub const MENU_TRAY_LANGUAGE: usize = 304;
 pub const MENU_TRAY_LANG_ZH: usize = 305;
 pub const MENU_TRAY_LANG_EN: usize = 306;
-pub const MENU_TRAY_ONLY_INPUT: usize = 307;
+pub const MENU_TRAY_MODE_CARET: usize = 307;
+pub const MENU_TRAY_MODE_MOUSE: usize = 308;
 
 // Resource identifier for application icon
 pub const IDI_APP_ICON: usize = 1;

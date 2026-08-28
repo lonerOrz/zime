@@ -16,7 +16,8 @@ const ID_TRAY_AUTOSTART: usize = config.MENU_TRAY_AUTOSTART;
 const ID_TRAY_RESTART: usize = config.MENU_TRAY_RESTART;
 const ID_TRAY_LANG_ZH: usize = config.MENU_TRAY_LANG_ZH;
 const ID_TRAY_LANG_EN: usize = config.MENU_TRAY_LANG_EN;
-const ID_TRAY_ONLY_INPUT: usize = config.MENU_TRAY_ONLY_INPUT;
+const ID_TRAY_MODE_CARET: usize = config.MENU_TRAY_MODE_CARET;
+const ID_TRAY_MODE_MOUSE: usize = config.MENU_TRAY_MODE_MOUSE;
 
 fn makeResourcePtr(id: usize) [*c]const c_ushort {
     const u = union(enum) {
@@ -30,15 +31,16 @@ var g_hwnd_main: c.HWND = null;
 var g_nid: c.NOTIFYICONDATAW = undefined;
 var g_last_state: ?ime.ImeState = null;
 var g_h_mutex: ?c.HANDLE = null;
+var g_instance: c.HINSTANCE = null;
 var g_lang: i18n.Language = .auto;
+var g_mode: config.IndicatorMode = .caret_focus;
 var g_strs: i18n.Strings = undefined;
-var g_only_on_input: bool = false;
 
 const run_subkey = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const run_value_name = std.unicode.utf8ToUtf16LeStringLiteral("Zime");
 
-const only_input_subkey = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Zime");
-const only_input_value_name = std.unicode.utf8ToUtf16LeStringLiteral("only_on_input");
+const config_subkey = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Zime");
+const mode_value_name = std.unicode.utf8ToUtf16LeStringLiteral("mode");
 
 const KEY_QUERY: u32 = 0x0001;
 const KEY_SET: u32 = 0x0002;
@@ -89,33 +91,52 @@ fn setLanguage(lang: i18n.Language) void {
 
     overlay.setLanguage(lang);
     if (g_last_state) |state| {
-        if (overlay.show(state, g_only_on_input)) {
-            _ = c.SetTimer(g_hwnd_main, ID_TIMER_AUTOHIDE, @intCast(config.autohide_duration_ms), null);
+        if (overlay.show(state, g_mode)) {
+            if (g_mode == .caret_focus) {
+                _ = c.SetTimer(g_hwnd_main, ID_TIMER_AUTOHIDE, @intCast(config.autohide_duration_ms), null);
+            }
         }
     }
 }
 
-fn loadOnlyOnInput() bool {
+fn loadPersistedMode() config.IndicatorMode {
     var hk: *anyopaque = undefined;
-    if (win.RegOpenKeyExW(win.HKCU_VALUE, only_input_subkey.ptr, 0, KEY_QUERY, &hk) != 0) return false;
+    if (win.RegOpenKeyExW(win.HKCU_VALUE, config_subkey.ptr, 0, KEY_QUERY, &hk) != 0) return .caret_focus;
     defer _ = win.RegCloseKey(hk);
 
     var val: u32 = 0;
     var cb: u32 = @sizeOf(u32);
-    if (win.RegQueryValueExW(hk, only_input_value_name.ptr, null, null, &val, &cb) == 0) {
-        return val == 1;
+    if (win.RegQueryValueExW(hk, mode_value_name.ptr, null, null, &val, &cb) == 0) {
+        return if (val == 1) .mouse_follow else .caret_focus;
     }
-    return false;
+    return .caret_focus;
 }
 
-fn setOnlyOnInput(enable: bool) void {
-    g_only_on_input = enable;
+fn persistMode(mode: config.IndicatorMode) void {
     var hk: *anyopaque = undefined;
-    if (win.RegCreateKeyExW(win.HKCU_VALUE, only_input_subkey.ptr, 0, null, 0, KEY_SET, null, &hk, null) != 0) return;
+    if (win.RegCreateKeyExW(win.HKCU_VALUE, config_subkey.ptr, 0, null, 0, KEY_SET, null, &hk, null) != 0) return;
     defer _ = win.RegCloseKey(hk);
 
-    const val: u32 = if (enable) 1 else 0;
-    _ = win.RegSetValueExW(hk, only_input_value_name.ptr, 0, 4, &val, @sizeOf(u32));
+    const val: u32 = @intFromEnum(mode);
+    _ = win.RegSetValueExW(hk, mode_value_name.ptr, 0, 4, &val, @sizeOf(u32));
+}
+
+fn setMode(mode: config.IndicatorMode) void {
+    if (g_mode == mode) return;
+    g_mode = mode;
+    persistMode(mode);
+
+    if (mode == .mouse_follow) {
+        hook.installMouseHook();
+        _ = c.KillTimer(g_hwnd_main, ID_TIMER_AUTOHIDE);
+        const current = ime.queryCurrentState();
+        g_last_state = current;
+        _ = overlay.show(current, .mouse_follow);
+    } else {
+        hook.uninstallMouseHook();
+        _ = c.KillTimer(g_hwnd_main, ID_TIMER_AUTOHIDE);
+        overlay.hide();
+    }
 }
 
 fn restartSelf() void {
@@ -149,9 +170,13 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
                 const current = ime.queryCurrentState();
                 g_last_state = current;
 
-                _ = c.KillTimer(hwnd, ID_TIMER_AUTOHIDE);
-                if (overlay.show(current, g_only_on_input)) {
-                    _ = c.SetTimer(hwnd, ID_TIMER_AUTOHIDE, @intCast(config.autohide_duration_ms), null);
+                if (g_mode == .caret_focus) {
+                    _ = c.KillTimer(hwnd, ID_TIMER_AUTOHIDE);
+                    if (overlay.show(current, .caret_focus)) {
+                        _ = c.SetTimer(hwnd, ID_TIMER_AUTOHIDE, @intCast(config.autohide_duration_ms), null);
+                    }
+                } else {
+                    _ = overlay.show(current, .mouse_follow);
                 }
             } else if (wparam == ID_TIMER_AUTOHIDE) {
                 _ = c.KillTimer(hwnd, ID_TIMER_AUTOHIDE);
@@ -169,6 +194,14 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
                 _ = c.AppendMenuW(hmenu, item_flags, ID_TRAY_AUTOSTART, g_strs.menu_autostart);
                 _ = c.AppendMenuW(hmenu, c.MF_SEPARATOR, 0, null);
 
+                // Mode radio selection
+                const caret_checked: c.UINT = @intCast(if (g_mode == .caret_focus) c.MF_CHECKED else c.MF_UNCHECKED);
+                const mouse_checked: c.UINT = @intCast(if (g_mode == .mouse_follow) c.MF_CHECKED else c.MF_UNCHECKED);
+                _ = c.AppendMenuW(hmenu, caret_checked, ID_TRAY_MODE_CARET, g_strs.menu_mode_caret);
+                _ = c.AppendMenuW(hmenu, mouse_checked, ID_TRAY_MODE_MOUSE, g_strs.menu_mode_mouse);
+                _ = c.AppendMenuW(hmenu, c.MF_SEPARATOR, 0, null);
+
+                // Language submenu
                 if (c.CreatePopupMenu()) |hlang| {
                     const lang_checked_zh = if (g_lang == .zh_CN) c.MF_CHECKED else c.MF_UNCHECKED;
                     const lang_checked_en = if (g_lang == .en) c.MF_CHECKED else c.MF_UNCHECKED;
@@ -177,9 +210,6 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
                     _ = c.AppendMenuW(hmenu, @intCast(c.MF_POPUP), @intFromPtr(hlang), g_strs.menu_language);
                 }
 
-                _ = c.AppendMenuW(hmenu, c.MF_SEPARATOR, 0, null);
-                const input_only_flag: c.UINT = @intCast(if (g_only_on_input) c.MF_CHECKED else c.MF_UNCHECKED);
-                _ = c.AppendMenuW(hmenu, input_only_flag, ID_TRAY_ONLY_INPUT, g_strs.menu_only_input);
                 _ = c.AppendMenuW(hmenu, c.MF_SEPARATOR, 0, null);
                 _ = c.AppendMenuW(hmenu, c.MF_STRING, ID_TRAY_RESTART, g_strs.menu_restart);
                 _ = c.AppendMenuW(hmenu, c.MF_STRING, ID_TRAY_EXIT, g_strs.menu_exit);
@@ -196,7 +226,8 @@ fn windowProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) cal
                 ID_TRAY_AUTOSTART => setAutostart(!autostartEnabled()),
                 ID_TRAY_LANG_ZH => setLanguage(.zh_CN),
                 ID_TRAY_LANG_EN => setLanguage(.en),
-                ID_TRAY_ONLY_INPUT => setOnlyOnInput(!g_only_on_input),
+                ID_TRAY_MODE_CARET => setMode(.caret_focus),
+                ID_TRAY_MODE_MOUSE => setMode(.mouse_follow),
                 else => {},
             }
         },
@@ -223,12 +254,13 @@ pub fn main() !void {
     };
 
     const instance: c.HINSTANCE = @ptrCast(c.GetModuleHandleW(null));
+    g_instance = instance;
 
     const persisted = i18n.I18n.loadPersistedLanguage();
     const lang = i18n.I18n.resolveLanguage(persisted);
     g_lang = lang;
     g_strs = i18n.I18n.getStrings(lang);
-    g_only_on_input = loadOnlyOnInput();
+    g_mode = loadPersistedMode();
 
     const raw_icon_big = c.LoadImageW(instance, makeResourcePtr(config.IDI_APP_ICON), c.IMAGE_ICON, 0, 0, c.LR_DEFAULTCOLOR);
     const h_icon_big: c.HICON = if (raw_icon_big) |h| @ptrFromInt(@intFromPtr(h)) else @ptrFromInt(0);
@@ -278,6 +310,12 @@ pub fn main() !void {
     _ = c.Shell_NotifyIconW(c.NIM_ADD, &g_nid);
 
     hook.installHooks(g_hwnd_main, instance);
+    if (g_mode == .mouse_follow) {
+        hook.installMouseHook();
+        const current = ime.queryCurrentState();
+        g_last_state = current;
+        _ = overlay.show(current, .mouse_follow);
+    }
     defer hook.uninstallHooks();
 
     var msg: c.MSG = undefined;
