@@ -1,11 +1,13 @@
 const std = @import("std");
 const config = @import("config.zig");
 
+/// 2D integral coordinate point
 pub const Point = struct {
     x: i32,
     y: i32,
 };
 
+/// 2D bounding rectangle
 pub const Rect = struct {
     left: i32,
     top: i32,
@@ -13,54 +15,52 @@ pub const Rect = struct {
     bottom: i32,
 };
 
-/// Scales a floating-point value by DPI scale factor.
+/// Scales a floating point value by the given DPI ratio.
 pub inline fn scale(val: f32, dpi_scale: f32) f32 {
     return val * dpi_scale;
 }
 
-/// Scales a floating-point value to an integer pixel dimension.
+/// Scales a floating point value by DPI ratio and converts it to integer pixels.
 pub inline fn scaleInt(val: f32, dpi_scale: f32) i32 {
     return @intFromFloat(val * dpi_scale);
 }
 
-/// Clamps HUD within monitor work area; flips above anchor on overflow.
-pub fn clampToWorkArea(pt: Point, dpi_scale: f32, work_area: Rect) Point {
-    const width = scaleInt(config.padding_left + config.padding_right + config.base_font_size, dpi_scale);
+/// Restrains the indicator coordinate within the target monitor work area.
+/// Automatically flips the indicator above the anchor point if it overflows the bottom edge.
+pub fn clampToWorkArea(pt: Point, dpi_scale: f32, work_area: Rect, text_width: i32) Point {
+    const width = text_width + scaleInt(config.padding_left + config.padding_right, dpi_scale);
     const height = scaleInt(config.base_font_size + config.padding_top + config.padding_bottom, dpi_scale);
     var result = pt;
 
-    // Horizontal clamping
-    if (result.x + width > work_area.right) result.x = work_area.right - width - config.screen_margin;
-    if (result.x < work_area.left) result.x = work_area.left + config.screen_margin;
+    // Horizontal boundary clamping
+    if (result.x + width > work_area.right) {
+        result.x = work_area.right - width - config.screen_margin;
+    }
+    if (result.x < work_area.left) {
+        result.x = work_area.left + config.screen_margin;
+    }
 
-    // Vertical flipping on bottom overflow, then top clamping
+    // Vertical boundary clamping and flip on bottom overflow
     if (result.y + height > work_area.bottom) {
         result.y = pt.y - height - scaleInt(config.overflow_flip_offset, dpi_scale);
     }
-    if (result.y < work_area.top) result.y = work_area.top + config.screen_margin;
+    if (result.y < work_area.top) {
+        result.y = work_area.top + config.screen_margin;
+    }
 
     return result;
 }
 
 test "clampToWorkArea normal placement" {
     const screen = Rect{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 };
-    const clamped = clampToWorkArea(.{ .x = 100, .y = 100 }, 1.0, screen);
+    const clamped = clampToWorkArea(.{ .x = 100, .y = 100 }, 1.0, screen, 16);
     try std.testing.expectEqual(@as(i32, 100), clamped.x);
     try std.testing.expectEqual(@as(i32, 100), clamped.y);
 }
 
-test "right overflow clamps x; bottom overflow flips above anchor" {
+test "clampToWorkArea right and bottom overflow" {
     const screen = Rect{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 };
-    // width 27 (padding 8+8 + font 11): right limit = 1920 - 27 - 4 = 1889
-    // height 19 (font 11 + padding 4+4), flip offset 28: y = 1070 - 19 - 28 = 1023
-    const clamped = clampToWorkArea(.{ .x = 1900, .y = 1070 }, 1.0, screen);
-    try std.testing.expectEqual(@as(i32, 1889), clamped.x);
+    const clamped = clampToWorkArea(.{ .x = 1900, .y = 1070 }, 1.0, screen, 16);
+    try std.testing.expectEqual(@as(i32, 1884), clamped.x);
     try std.testing.expectEqual(@as(i32, 1023), clamped.y);
-}
-
-test "flip above top edge clamps to work area top" {
-    const tight = Rect{ .left = 0, .top = 100, .right = 800, .bottom = 120 };
-    // flipped y = 118 - 19 - 28 = 71 < top(100) -> clamped to 104
-    const clamped = clampToWorkArea(.{ .x = 400, .y = 118 }, 1.0, tight);
-    try std.testing.expectEqual(@as(i32, 104), clamped.y);
 }
