@@ -5,12 +5,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const strip = b.option(bool, "strip", "Strip debug info from the binary") orelse false;
+
     // Create root application module
     const root_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
     });
 
     // Link required Windows system libraries
