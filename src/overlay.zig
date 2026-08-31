@@ -216,7 +216,9 @@ pub fn show(state: ime.ImeState, mode: config.IndicatorMode) bool {
     const hwnd = g_hwnd_overlay orelse return false;
     if (!ensureGdiplus()) return false;
 
-    const dpi = win.GetDpiForWindow(hwnd);
+    const hwnd_fg = c.GetForegroundWindow();
+    const target_hwnd = if (hwnd_fg != null) hwnd_fg else hwnd;
+    const dpi = win.GetDpiForWindow(target_hwnd);
     const dpi_scale: f32 = @as(f32, @floatFromInt(if (dpi > 0) dpi else 96)) / 96.0;
 
     const hdc_screen = c.GetDC(null);
@@ -244,12 +246,7 @@ pub fn show(state: ime.ImeState, mode: config.IndicatorMode) bool {
                 hide();
                 return false;
             }
-            const anchor = anchor_opt.?;
-            if (!anchor.is_caret) {
-                hide();
-                return false;
-            }
-            pt = anchor.point;
+            pt = anchor_opt.?.point;
         },
         .mouse_follow => {
             var mouse_pt = c.POINT{ .x = 0, .y = 0 };

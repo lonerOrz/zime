@@ -125,15 +125,14 @@ fn setMode(mode: config.IndicatorMode) void {
     if (g_mode == mode) return;
     g_mode = mode;
     persistMode(mode);
+    hook.setMode(mode);
 
     if (mode == .mouse_follow) {
-        hook.installMouseHook();
         _ = c.KillTimer(g_hwnd_main, ID_TIMER_AUTOHIDE);
         const current = ime.queryCurrentState();
         g_last_state = current;
         _ = overlay.show(current, .mouse_follow);
     } else {
-        hook.uninstallMouseHook();
         _ = c.KillTimer(g_hwnd_main, ID_TIMER_AUTOHIDE);
         overlay.hide();
     }
@@ -309,9 +308,8 @@ pub fn main() !void {
     @memcpy(g_nid.szTip[0..tip_len], tip[0..tip_len]);
     _ = c.Shell_NotifyIconW(c.NIM_ADD, &g_nid);
 
-    hook.installHooks(g_hwnd_main, instance);
+    hook.installHooks(g_hwnd_main, instance, g_mode);
     if (g_mode == .mouse_follow) {
-        hook.installMouseHook();
         const current = ime.queryCurrentState();
         g_last_state = current;
         _ = overlay.show(current, .mouse_follow);
